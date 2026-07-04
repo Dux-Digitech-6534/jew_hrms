@@ -1,0 +1,28 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["location_name", "latitude", "longitude", "default_radius_meter", "is_active"],
+ "fields": [
+  {"fieldname": "location_name", "label": "Location Name", "fieldtype": "Data", "reqd": 1},
+  {"fieldname": "latitude", "label": "Latitude", "fieldtype": "Float", "reqd": 1},
+  {"fieldname": "longitude", "label": "Longitude", "fieldtype": "Float", "reqd": 1},
+  {"fieldname": "default_radius_meter", "label": "Default Radius Meter", "fieldtype": "Int", "default": "100"},
+  {"fieldname": "is_active", "label": "Is Active", "fieldtype": "Check", "default": "1"}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "JEW HRMS Mobile",
+ "name": "JEW Attendance Location",
+ "permissions": [
+  {"role": "HR User", "read": 1, "write": 1, "create": 1, "delete": 0, "report": 1, "print": 1},
+  {"role": "HR Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "print": 1},
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "print": 1}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1,
+ "title_field": "location_name"
+}

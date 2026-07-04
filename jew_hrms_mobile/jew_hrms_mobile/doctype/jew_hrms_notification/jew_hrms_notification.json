@@ -1,0 +1,33 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["employee", "notification_type", "title", "message", "is_read", "reference_doctype", "reference_name"],
+ "fields": [
+  {"fieldname": "employee", "label": "Employee", "fieldtype": "Link", "options": "Employee"},
+  {"fieldname": "notification_type", "label": "Notification Type", "fieldtype": "Select", "options": "Info\nWarning\nSuccess\nError", "default": "Info"},
+  {"fieldname": "title", "label": "Title", "fieldtype": "Data", "reqd": 1},
+  {"fieldname": "message", "label": "Message", "fieldtype": "Small Text"},
+  {"fieldname": "is_read", "label": "Is Read", "fieldtype": "Check", "default": "0"},
+  {"fieldname": "reference_doctype", "label": "Reference DocType", "fieldtype": "Data"},
+  {"fieldname": "reference_name", "label": "Reference Name", "fieldtype": "Data"}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "JEW HRMS Mobile",
+ "name": "JEW HRMS Notification",
+ "permissions": [
+  {"role": "Employee", "read": 1, "write": 0, "create": 0, "delete": 0, "report": 0, "print": 1},
+  {"role": "HR User", "read": 1, "write": 1, "create": 1, "delete": 0, "report": 1, "print": 1},
+  {"role": "HR Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "print": 1},
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "print": 1},
+  {"role": "JEW HRMS HR", "read": 1, "write": 1, "create": 1, "delete": 0, "report": 1, "print": 1},
+  {"role": "JEW HRMS Admin", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "print": 1}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1,
+ "title_field": "title"
+}

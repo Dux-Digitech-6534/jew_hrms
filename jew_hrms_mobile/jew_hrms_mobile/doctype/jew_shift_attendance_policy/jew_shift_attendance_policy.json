@@ -1,0 +1,40 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["shift_name", "shift_start_time", "shift_end_time", "break_minutes", "full_day_minimum_hours", "half_day_minimum_hours", "late_coming_grace_minutes", "early_going_grace_minutes", "max_late_coming_allowed_per_month", "max_early_going_allowed_per_month", "max_short_hours_allowed_per_month", "action_after_late_limit", "action_after_early_limit", "action_after_short_hours_limit", "is_active"],
+ "fields": [
+  {"fieldname": "shift_name", "label": "Shift Name", "fieldtype": "Data", "reqd": 1},
+  {"fieldname": "shift_start_time", "label": "Shift Start Time", "fieldtype": "Time", "reqd": 1, "default": "09:30:00"},
+  {"fieldname": "shift_end_time", "label": "Shift End Time", "fieldtype": "Time", "reqd": 1, "default": "18:30:00"},
+  {"fieldname": "break_minutes", "label": "Break Minutes", "fieldtype": "Int", "default": "60"},
+  {"fieldname": "full_day_minimum_hours", "label": "Full Day Minimum Hours", "fieldtype": "Float", "default": "8"},
+  {"fieldname": "half_day_minimum_hours", "label": "Half Day Minimum Hours", "fieldtype": "Float", "default": "4"},
+  {"fieldname": "late_coming_grace_minutes", "label": "Late Coming Grace Minutes", "fieldtype": "Int", "default": "10"},
+  {"fieldname": "early_going_grace_minutes", "label": "Early Going Grace Minutes", "fieldtype": "Int", "default": "10"},
+  {"fieldname": "max_late_coming_allowed_per_month", "label": "Max Late Coming Allowed Per Month", "fieldtype": "Int", "default": "0"},
+  {"fieldname": "max_early_going_allowed_per_month", "label": "Max Early Going Allowed Per Month", "fieldtype": "Int", "default": "0"},
+  {"fieldname": "max_short_hours_allowed_per_month", "label": "Max Short Hours Allowed Per Month", "fieldtype": "Int", "default": "0"},
+  {"fieldname": "action_after_late_limit", "label": "Action After Late Limit", "fieldtype": "Select", "options": "Warn Only\nRegularization Required\nMark Half Day\nMark LWP\nBlock Attendance", "default": "Regularization Required"},
+  {"fieldname": "action_after_early_limit", "label": "Action After Early Limit", "fieldtype": "Select", "options": "Warn Only\nRegularization Required\nMark Half Day\nMark LWP\nBlock Attendance", "default": "Regularization Required"},
+  {"fieldname": "action_after_short_hours_limit", "label": "Action After Short Hours Limit", "fieldtype": "Select", "options": "Warn Only\nRegularization Required\nMark Half Day\nMark LWP\nBlock Attendance", "default": "Regularization Required"},
+  {"fieldname": "is_active", "label": "Is Active", "fieldtype": "Check", "default": "1"}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "JEW HRMS Mobile",
+ "name": "JEW Shift Attendance Policy",
+ "permissions": [
+  {"role": "HR User", "read": 1, "write": 1, "create": 1, "delete": 0, "report": 1, "print": 1},
+  {"role": "HR Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "print": 1},
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "print": 1},
+  {"role": "JEW HRMS HR", "read": 1, "write": 1, "create": 1, "delete": 0, "report": 1, "print": 1},
+  {"role": "JEW HRMS Admin", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "print": 1}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1,
+ "title_field": "shift_name"
+}

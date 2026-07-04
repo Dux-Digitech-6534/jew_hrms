@@ -1,0 +1,27 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["employee", "location", "radius_meter", "is_active"],
+ "fields": [
+  {"fieldname": "employee", "label": "Employee", "fieldtype": "Link", "options": "Employee", "reqd": 1},
+  {"fieldname": "location", "label": "Location", "fieldtype": "Link", "options": "JEW Attendance Location", "reqd": 1},
+  {"fieldname": "radius_meter", "label": "Radius Meter", "fieldtype": "Int"},
+  {"fieldname": "is_active", "label": "Is Active", "fieldtype": "Check", "default": "1"}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "JEW HRMS Mobile",
+ "name": "JEW Employee Location Assignment",
+ "permissions": [
+  {"role": "HR User", "read": 1, "write": 1, "create": 1, "delete": 0, "report": 1, "print": 1},
+  {"role": "HR Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "print": 1},
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "print": 1}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1,
+ "title_field": "employee"
+}

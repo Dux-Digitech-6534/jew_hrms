@@ -1,0 +1,32 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["employee", "user", "face_image", "face_encoding", "face_template", "is_active", "registered_by", "registered_on", "last_updated_on"],
+ "fields": [
+  {"fieldname": "employee", "label": "Employee", "fieldtype": "Link", "options": "Employee", "reqd": 1},
+  {"fieldname": "user", "label": "User", "fieldtype": "Link", "options": "User"},
+  {"fieldname": "face_image", "label": "Face Image", "fieldtype": "Attach Image"},
+  {"fieldname": "face_encoding", "label": "Face Encoding", "fieldtype": "Long Text"},
+  {"fieldname": "face_template", "label": "Face Template", "fieldtype": "Long Text"},
+  {"fieldname": "is_active", "label": "Is Active", "fieldtype": "Check", "default": "1"},
+  {"fieldname": "registered_by", "label": "Registered By", "fieldtype": "Link", "options": "User"},
+  {"fieldname": "registered_on", "label": "Registered On", "fieldtype": "Datetime"},
+  {"fieldname": "last_updated_on", "label": "Last Updated On", "fieldtype": "Datetime"}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "module": "JEW HRMS Mobile",
+ "name": "JEW Employee Face",
+ "permissions": [
+  {"role": "HR User", "read": 1, "write": 1, "create": 1, "delete": 0, "report": 1, "print": 1},
+  {"role": "HR Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "print": 1},
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "print": 1}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1,
+ "title_field": "employee"
+}
