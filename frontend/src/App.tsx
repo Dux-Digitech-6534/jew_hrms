@@ -24,6 +24,7 @@ import {
   XCircle
 } from "lucide-react";
 import { Component, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { MapContainer, Marker, TileLayer, Circle, useMap, useMapEvents } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { API, call, cleanErrorMessage, logout } from "./api";
@@ -76,6 +77,34 @@ const DENY: Caps = {
 };
 
 const REMEMBER_LOGIN_KEY = "jew_hrms_remember_login";
+const ADMIN_ACCESS_ROLES = [
+  "JEW HRMS Admin",
+  "JEW HRMS HR",
+  "JEW HRMS Owner"
+];
+const ADMIN_VIEWS: ReadonlySet<View> = new Set<View>(["admin", "face", "location", "leaveApproval", "leavePolicy", "shiftPolicy", "regularization", "employees"]);
+
+function canAccessAdmin(userRoles: unknown) {
+  return Array.isArray(userRoles) && userRoles.some((role) => typeof role === "string" && ADMIN_ACCESS_ROLES.includes(role));
+}
+
+function applyAdminRoleVisibility(userCaps: Partial<Caps>, userRoles: unknown): Caps {
+  const adminAllowed = canAccessAdmin(userRoles);
+  return {
+    ...DENY,
+    ...userCaps,
+    can_view_admin: adminAllowed,
+    can_register_face: adminAllowed && Boolean(userCaps.can_register_face),
+    can_manage_locations: adminAllowed && Boolean(userCaps.can_manage_locations),
+    can_approve_leave: adminAllowed && Boolean(userCaps.can_approve_leave),
+    can_manage_leave_policy: adminAllowed && Boolean(userCaps.can_manage_leave_policy),
+    can_manage_shift_policy: adminAllowed && Boolean(userCaps.can_manage_shift_policy),
+    can_manage_regularization: adminAllowed && Boolean(userCaps.can_manage_regularization),
+    is_admin: adminAllowed && Boolean(userCaps.is_admin),
+    is_hr: adminAllowed && Boolean(userCaps.is_hr),
+    is_owner: adminAllowed && Boolean(userCaps.is_owner)
+  };
+}
 
 function capacitorPlugin(name: string) {
   return (window as any).Capacitor?.Plugins?.[name];
@@ -234,17 +263,36 @@ export default function App() {
     window.setTimeout(() => setToast(null), 3200);
   };
 
+  const resetSessionState = () => {
+    window.dispatchEvent(new Event("jew-hrms-stop-camera"));
+    window.dispatchEvent(new Event("jew-hrms-close-attendance-verify"));
+    setSession(null);
+    setDashboard(null);
+    setProfile(null);
+    setHistory(null);
+    setLeaveData({});
+    setAdminData({});
+    setSelectedEmployee("");
+    setNotifications([]);
+    setCaps(DENY);
+    setView("dashboard");
+    setViewStack([]);
+    setMenuOpen(false);
+    setRefreshing(false);
+    setCameraActive(false);
+  };
+
   const loadBase = async (force = false) => {
     if (!force && !hasActiveFrappeUserCookie()) {
+      resetSessionState();
       setLoggedIn(false);
-      setCaps(DENY);
       return;
     }
     try {
       const user = await call(API.getSessionUser);
       const c = await call<Caps>(API.capabilities);
       setSession(user);
-      setCaps({ ...DENY, ...c });
+      setCaps(applyAdminRoleVisibility(c, user?.roles));
       setLoggedIn(true);
       try {
         const dash = await call(API.getDashboard);
@@ -253,24 +301,16 @@ export default function App() {
         setDashboard(null);
       }
     } catch {
+      resetSessionState();
       setLoggedIn(false);
-      setCaps(DENY);
     }
   };
 
   const handleLogout = async () => {
     try {
       await logout();
+      resetSessionState();
       setLoggedIn(false);
-      setSession(null);
-      setDashboard(null);
-      setProfile(null);
-      setHistory(null);
-      setLeaveData({});
-      setAdminData({});
-      setNotifications([]);
-      setCaps(DENY);
-      setView("dashboard");
       flash("Logged out", "You have returned to JEW HRMS login.");
     } catch (error) {
       flash("Logout failed", cleanErrorMessage(error));
@@ -282,6 +322,7 @@ export default function App() {
   }, []);
 
   const loadViewData = async (next: View) => {
+    if (ADMIN_VIEWS.has(next) && !caps.can_view_admin) return;
     if (next === "dashboard") setDashboard(await call(API.getDashboard));
     if (next === "attendance") {
       const status = await call(API.getTodayAttendanceStatus);
@@ -338,8 +379,12 @@ export default function App() {
   };
 
   const open = async (next: View, options: { replace?: boolean; silent?: boolean } = {}) => {
-    if (next === "admin" && !caps.can_view_admin) {
+    if (ADMIN_VIEWS.has(next) && !caps.can_view_admin) {
       flash("Not permitted", "You do not have access to this admin screen.");
+      if (view !== "dashboard") {
+        setView("dashboard");
+        setViewStack([]);
+      }
       return;
     }
     if (next === "face" && !caps.can_register_face) {
@@ -434,16 +479,22 @@ export default function App() {
     };
   }, [cameraActive, menuOpen, view, viewStack]);
 
+  useEffect(() => {
+    if (loggedIn && ADMIN_VIEWS.has(view) && !caps.can_view_admin) {
+      setView("dashboard");
+      setViewStack([]);
+      flash("Not permitted", "You do not have access to this admin screen.");
+    }
+  }, [caps.can_view_admin, loggedIn, view]);
+
   const navItems = useMemo(() => {
     const items = [
       { id: "dashboard", label: "Home", icon: <Home size={19} />, view: "dashboard" as View },
       ...(caps.can_mark_attendance ? [{ id: "attendance", label: "Attendance", icon: <Clock3 size={19} />, view: "attendance" as View }] : []),
-      ...(caps.can_apply_leave ? [{ id: "leave", label: "Leave", icon: <CalendarDays size={19} />, view: "leave" as View }] : []),
-      ...(caps.can_view_admin ? [{ id: "admin", label: "Admin", icon: <ShieldCheck size={19} />, view: "admin" as View }] : []),
       { id: "profile", label: "Profile", icon: <UserRound size={19} />, view: "profile" as View }
     ];
     return items;
-  }, [caps.can_apply_leave, caps.can_mark_attendance, caps.can_view_admin]);
+  }, [caps.can_mark_attendance]);
 
   if (loggedIn === null) {
     return <div className="shell center"><div className="loader">Loading JEW HRMS</div></div>;
@@ -476,14 +527,14 @@ export default function App() {
         {view === "attendance" && <Attendance flash={flash} open={open} initialStatus={adminData.attendanceStatus} onCameraActiveChange={setCameraActive} onMarked={async () => { setDashboard(await call(API.getDashboard)); const status = await call(API.getTodayAttendanceStatus); setAdminData((prev: any) => ({ ...prev, attendanceStatus: status })); }} />}
         {view === "history" && <History data={history} />}
         {view === "leave" && <Leave data={leaveData} caps={caps} flash={flash} reload={() => open("leave")} />}
-        {view === "admin" && <Admin open={open} caps={caps} />}
-        {view === "face" && <FaceAdmin employees={adminData.employees || []} flash={flash} selectedEmployee={selectedEmployee} onCameraActiveChange={setCameraActive} />}
-        {view === "location" && <LocationAdmin data={adminData} setData={setAdminData} flash={flash} reload={() => open("location")} />}
-        {view === "leaveApproval" && <LeaveApproval leaves={adminData.pendingLeaves || []} flash={flash} reload={() => open("leaveApproval")} />}
-        {view === "leavePolicy" && <LeavePolicy types={adminData.leaveTypes || []} flash={flash} reload={() => open("leavePolicy")} />}
-        {view === "shiftPolicy" && <ShiftPolicy policies={adminData.shiftPolicies || []} flash={flash} reload={() => open("shiftPolicy")} />}
-        {view === "regularization" && <Regularization items={adminData.regularizations || []} flash={flash} reload={() => open("regularization")} />}
-        {view === "employees" && <Employees employees={adminData.employees || []} open={open} selectEmployee={setSelectedEmployee} />}
+        {view === "admin" && (caps.can_view_admin ? <Admin open={open} caps={caps} /> : <NotPermitted />)}
+        {view === "face" && (caps.can_view_admin && caps.can_register_face ? <FaceAdmin employees={adminData.employees || []} flash={flash} selectedEmployee={selectedEmployee} onCameraActiveChange={setCameraActive} /> : <NotPermitted />)}
+        {view === "location" && (caps.can_view_admin && caps.can_manage_locations ? <LocationAdmin data={adminData} setData={setAdminData} flash={flash} reload={() => open("location")} /> : <NotPermitted />)}
+        {view === "leaveApproval" && (caps.can_view_admin && caps.can_approve_leave ? <LeaveApproval leaves={adminData.pendingLeaves || []} flash={flash} reload={() => open("leaveApproval")} /> : <NotPermitted />)}
+        {view === "leavePolicy" && (caps.can_view_admin && caps.can_manage_leave_policy ? <LeavePolicy types={adminData.leaveTypes || []} flash={flash} reload={() => open("leavePolicy")} /> : <NotPermitted />)}
+        {view === "shiftPolicy" && (caps.can_view_admin && caps.can_manage_shift_policy ? <ShiftPolicy policies={adminData.shiftPolicies || []} flash={flash} reload={() => open("shiftPolicy")} /> : <NotPermitted />)}
+        {view === "regularization" && (caps.can_view_admin && caps.can_manage_regularization ? <Regularization items={adminData.regularizations || []} flash={flash} reload={() => open("regularization")} /> : <NotPermitted />)}
+        {view === "employees" && (caps.can_view_admin ? <Employees employees={adminData.employees || []} open={open} selectEmployee={setSelectedEmployee} /> : <NotPermitted />)}
         {view === "notifications" && <Notifications items={notifications} />}
         {view === "profile" && <Profile profile={profile} open={open} onLogout={handleLogout} />}
         {view === "settings" && <Settings theme={theme} setTheme={setTheme} onLogout={handleLogout} />}
@@ -593,7 +644,6 @@ function Login({ onDone, flash }: { onDone: () => void; flash: (title: string, m
               />
               <span>Remember password</span>
             </label>
-            <button type="button" className="forgot-link" onClick={() => flash("Forgot Password", "Please contact HR to reset your password.")}>Forgot Password?</button>
           </div>
           <button className="btn btn-primary btn-wide" type="submit" disabled={busy}>{busy ? "Signing in..." : "Sign In"}</button>
           <div className="module-strip"><div>Face</div><div>Location</div><div>Leave</div></div>
@@ -606,6 +656,10 @@ function Login({ onDone, flash }: { onDone: () => void; flash: (title: string, m
 
 function Hero({ eyebrow, title, grad, text }: { eyebrow: string; title: string; grad: string; text: string }) {
   return <div className="hero"><div className="eyebrow">{eyebrow}</div><h1>{title}<br /><span className="grad">{grad}</span></h1><p>{text}</p></div>;
+}
+
+function NotPermitted() {
+  return <div className="card accent card-pad"><Empty text="Not permitted." /></div>;
 }
 
 function PullToRefresh({ children, onRefresh, refreshing }: { children: ReactNode; onRefresh: () => Promise<void>; refreshing: boolean }) {
@@ -647,8 +701,7 @@ function MenuDrawer({ open, caps, active, openView, onClose, onLogout }: any) {
     { view: "dashboard", label: "Dashboard", icon: <Home size={18} /> },
     caps.can_mark_attendance && { view: "attendance", label: "Attendance", icon: <Clock3 size={18} /> },
     caps.can_mark_attendance && { view: "history", label: "Attendance History", icon: <CalendarDays size={18} /> },
-    caps.can_apply_leave && { view: "leave", label: "Leave Apply", icon: <CalendarDays size={18} /> },
-    caps.can_apply_leave && { view: "leave", label: "My Leaves", icon: <CalendarDays size={18} /> },
+    caps.can_apply_leave && { view: "leave", label: "Leave", icon: <CalendarDays size={18} /> },
     { view: "notifications", label: "Notifications", icon: <Bell size={18} /> },
     { view: "profile", label: "Profile", icon: <UserRound size={18} /> },
     { view: "settings", label: "Settings", icon: <SettingsIcon size={18} /> }
@@ -1199,7 +1252,7 @@ function LocationAdmin({ data, setData, flash, reload }: any) {
   const [employeeLocations, setEmployeeLocations] = useState<any[]>([]);
   const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
   const employeeOptions = (data.employees || []).map((e: any) => ({ value: e.name, label: e.label || e.employee_name || e.name, description: e.description || e.name }));
-  const locationOptions = (data.locations || []).map((l: any) => ({ value: l.name, label: l.location_name || l.name }));
+  const locationOptions = (data.locations || []).map((l: any) => ({ value: l.name, label: l.location_name || l.name, description: l.name }));
   const loadEmployeeLocations = async (employeeName: string) => {
     setEmployee(employeeName);
     setEmployeeLocations([]);
@@ -1240,11 +1293,18 @@ function LocationAdmin({ data, setData, flash, reload }: any) {
       return;
     }
     await runAction("assign-location", async () => {
-      await call(API.assignEmployeeLocation, { employee, location });
-      await reload();
-      const res = await call(API.getEmployeeLocations, { employee });
-      setEmployeeLocations(res.locations || []);
-    }, { successTitle: "Assigned", successMessage: "Employee geofence assigned.", errorTitle: "Assign failed" });
+      const selectedLocation = (data.locations || []).find((item: any) => item.name === location);
+      const res = await call(API.assignEmployeeLocation, { employee, location, radius_meter: selectedLocation?.default_radius_meter });
+      setEmployeeLocations((current) => {
+        const nextAssignment = {
+          assignment: res.assignment,
+          name: selectedLocation?.name || location,
+          location_name: selectedLocation?.location_name || location,
+          radius_meter: Number(selectedLocation?.default_radius_meter || res.radius_meter || 100)
+        };
+        return [nextAssignment, ...current.filter((item) => item.name !== location && item.location !== location)];
+      });
+    }, { successTitle: "Assigned", successMessage: "Location assigned successfully.", errorTitle: "Assign failed" });
   };
   const deleteLocation = async (name: string) => {
     await runAction(`delete-location-${name}`, async () => {
@@ -1374,12 +1434,54 @@ function Field({ label, value, onChange, type = "text" }: any) {
 }
 
 function Select({ label, value, onChange, options }: any) {
-  return <div className="field"><label>{label}</label><select className="select" value={value} onChange={(e) => onChange(e.target.value)}><option value="">Select</option>{(options || []).map((option: any) => {
-    const value = typeof option === "string" ? option : option.value;
+  const normalized = useMemo(() => (options || []).map((option: any) => {
+    const optionValue = typeof option === "string" ? option : option.value;
     const baseText = typeof option === "string" ? option : option.label;
-    const text = typeof option === "string" || !option.description ? baseText : `${baseText} (${value})`;
-    return <option value={value} key={value}>{text}</option>;
-  })}</select></div>;
+    const description = typeof option === "string" ? "" : option.description;
+    const text = description && description !== optionValue ? `${baseText} (${description})` : baseText;
+    return { value: optionValue, label: baseText || optionValue, description, text };
+  }), [options]);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  const selected = normalized.find((option: any) => option.value === value);
+  const filtered = normalized.filter((option: any) => {
+    const haystack = `${option.label} ${option.description || ""} ${option.value}`.toLowerCase();
+    return haystack.includes(query.trim().toLowerCase());
+  });
+
+  useEffect(() => {
+    if (!open) return;
+    const timer = window.setTimeout(() => searchRef.current?.focus(), 50);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const choose = (nextValue: string) => {
+    onChange(nextValue);
+    setOpen(false);
+    setQuery("");
+  };
+
+  return <div className="field searchable-field"><label>{label}</label><button className="select select-trigger" type="button" onClick={() => setOpen(true)}><span>{selected?.text || "Select"}</span><ChevronRight size={16} /></button>{open && createPortal(
+    <div className="select-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
+      <div className="select-sheet" role="dialog" aria-modal="true" aria-label={label}>
+        <div className="select-sheet-head"><strong>{label}</strong><button className="icon-btn" type="button" aria-label="Close" onClick={() => setOpen(false)}><X size={18} /></button></div>
+        <input ref={searchRef} className="input select-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${label.toLowerCase()}`} />
+        <div className="select-options">
+          <button className={`select-option ${!value ? "active" : ""}`} type="button" onClick={() => choose("")}>Select</button>
+          {filtered.length ? filtered.map((option: any) => <button className={`select-option ${option.value === value ? "active" : ""}`} type="button" key={option.value} onClick={() => choose(option.value)}><span>{option.label}</span>{option.description && <small>{option.description}</small>}</button>) : <div className="select-empty">No results found.</div>}
+        </div>
+      </div>
+    </div>,
+    document.body
+  )}</div>;
 }
 
 function Empty({ text }: { text: string }) {
