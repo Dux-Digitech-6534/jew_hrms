@@ -491,10 +491,11 @@ export default function App() {
     const items = [
       { id: "dashboard", label: "Home", icon: <Home size={19} />, view: "dashboard" as View },
       ...(caps.can_mark_attendance ? [{ id: "attendance", label: "Attendance", icon: <Clock3 size={19} />, view: "attendance" as View }] : []),
+      ...(caps.can_view_admin ? [{ id: "admin", label: "Admin", icon: <ShieldCheck size={19} />, view: "admin" as View }] : []),
       { id: "profile", label: "Profile", icon: <UserRound size={19} />, view: "profile" as View }
     ];
     return items;
-  }, [caps.can_mark_attendance]);
+  }, [caps.can_mark_attendance, caps.can_view_admin]);
 
   if (loggedIn === null) {
     return <div className="shell center"><div className="loader">Loading JEW HRMS</div></div>;
@@ -508,7 +509,6 @@ export default function App() {
   return (
     <ErrorBoundary>
     <div className="shell">
-      <img className="mascot-bg" src={assets.mascot} alt="" />
       <header className="topbar">
         <button className="icon-btn" onClick={goBack} aria-label="Back"><ArrowLeft size={18} /></button>
         <div className="brand">
@@ -605,7 +605,7 @@ function Login({ onDone, flash }: { onDone: () => void; flash: (title: string, m
         <div className="login-hero"><div className="eyebrow">JAIN ENGINEERING WORKS</div><h1>JEW <span className="grad">HRMS</span></h1><p>Attendance, leave, face verification and employee self service in one secure mobile app.</p></div>
         <div className="card accent login-card login-panel" role="group" aria-label="JEW HRMS login" onKeyDown={handleLoginKeyDown}>
           <div className="field">
-            <label htmlFor="login-usr">Username / Email</label>
+            <label htmlFor="login-usr">Employee ID / Email</label>
             <input
               id="login-usr"
               className="input"
@@ -615,7 +615,7 @@ function Login({ onDone, flash }: { onDone: () => void; flash: (title: string, m
               name="usr"
               autoComplete="username"
               inputMode="text"
-              placeholder="administrator or user@example.com"
+              placeholder="Employee ID or email"
               required
             />
           </div>
@@ -648,7 +648,7 @@ function Login({ onDone, flash }: { onDone: () => void; flash: (title: string, m
                   if (!checked) localStorage.removeItem(REMEMBER_LOGIN_KEY);
                 }}
               />
-              <span>Remember password</span>
+              <span>Keep me signed in</span>
             </label>
           </div>
           <button className="btn btn-primary btn-wide" type="button" onClick={() => void submit()} disabled={busy}>{busy ? "Signing in..." : "Sign In"}</button>
@@ -707,7 +707,7 @@ function MenuDrawer({ open, caps, active, openView, onClose, onLogout }: any) {
     { view: "dashboard", label: "Dashboard", icon: <Home size={18} /> },
     caps.can_mark_attendance && { view: "attendance", label: "Attendance", icon: <Clock3 size={18} /> },
     caps.can_mark_attendance && { view: "history", label: "Attendance History", icon: <CalendarDays size={18} /> },
-    caps.can_apply_leave && { view: "leave", label: "Leave", icon: <CalendarDays size={18} /> },
+    caps.can_apply_leave && { view: "leave", label: "Leave Apply", icon: <CalendarDays size={18} /> },
     { view: "notifications", label: "Notifications", icon: <Bell size={18} /> },
     { view: "profile", label: "Profile", icon: <UserRound size={18} /> },
     { view: "settings", label: "Settings", icon: <SettingsIcon size={18} /> }
@@ -947,6 +947,7 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: an
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const autoSubmitRef = useRef(false);
 
   useEffect(() => {
     setStatus(initialStatus || null);
@@ -987,6 +988,7 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: an
 
   const closeVerify = () => {
     stopVerifyCamera();
+    autoSubmitRef.current = false;
     setVerifyType(null);
     setSubmitting(false);
     setCoords(null);
@@ -1044,6 +1046,7 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: an
   useEffect(() => {
     if (!verifyType) return;
     let cancelled = false;
+    autoSubmitRef.current = false;
     stopVerifyCamera();
     setCoords(null);
     setGpsStatus("Captured on submit");
@@ -1058,6 +1061,16 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: an
       cancelled = true;
     };
   }, [verifyType]);
+
+  // Single-tap flow: once the camera is ready, automatically capture the face,
+  // grab GPS and submit — no second "Confirm" press. The ref + submitting guard
+  // keep this to exactly one auto-submission per Mark In/Out.
+  useEffect(() => {
+    if (verifyType && cameraReady && !submitting && !autoSubmitRef.current) {
+      autoSubmitRef.current = true;
+      void confirmVerify();
+    }
+  }, [verifyType, cameraReady]);
 
   const captureCurrentFrame = () => {
     const video = videoRef.current;
@@ -1132,7 +1145,8 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: an
   const employeeId = status?.employee || status?.employee_id || "";
   const initials = employeeName.split(" ").filter(Boolean).slice(0, 2).map((part: string) => part[0]).join("").toUpperCase() || "JE";
   if (verifyType) {
-    const confirmLabel = verifyType === "IN" ? "Confirm Mark In" : "Confirm Mark Out";
+    const actionName = verifyType === "IN" ? "Mark In" : "Mark Out";
+    const confirmLabel = submitting ? "Verifying..." : !cameraReady ? "Starting camera..." : `Retry ${actionName}`;
     return (
       <>
         <div className="verify-stack">
@@ -1153,9 +1167,9 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: an
             <div className="dux-face-frame"><span /></div>
             <div className="face-quality-card"><ShieldCheck size={18} /><span>{faceStatus}</span></div>
           </div>
-          <div className="verify-ready-card"><ShieldCheck size={20} /><div><b>Ready for ERPNext verification</b><span>Tap confirm to verify and mark attendance.</span></div></div>
-          <button className="btn btn-primary btn-wide verify-confirm" type="button" disabled={!cameraReady || submitting} onClick={confirmVerify}>
-            {submitting ? "Verifying..." : confirmLabel}
+          <div className="verify-ready-card"><ShieldCheck size={20} /><div><b>Ready for ERPNext verification</b><span>Face and location verify and submit automatically.</span></div></div>
+          <button className="btn btn-primary btn-wide verify-confirm" type="button" disabled={!cameraReady || submitting} onClick={() => { autoSubmitRef.current = true; void confirmVerify(); }}>
+            {confirmLabel}
           </button>
           <div className="faint verify-camera-status">{cameraStatus}</div>
         </div>
