@@ -108,6 +108,13 @@ def _require_approver():
 		frappe.throw(_("Permission denied"), frappe.PermissionError)
 
 
+def _require_employee_directory_access():
+	_require_login()
+	if not (_is_admin() or _is_hr() or _is_owner()):
+		return _fail("You do not have permission.", "permission_denied")
+	return None
+
+
 def _require_owner():
 	_require_login()
 	if not _is_owner():
@@ -866,20 +873,42 @@ def delete_location(name=None):
 	return _ok(message="Location deleted")
 
 
+def _resolve_attendance_location(location):
+	if not location:
+		return None
+	location = str(location).strip()
+	if frappe.db.exists("JEW Attendance Location", location):
+		return location
+	if location.endswith(")") and "(" in location:
+		maybe_name = location.rsplit("(", 1)[1].rstrip(")").strip()
+		if frappe.db.exists("JEW Attendance Location", maybe_name):
+			return maybe_name
+	return frappe.db.get_value("JEW Attendance Location", {"location_name": location}, "name")
+
+
 @frappe.whitelist()
 def assign_employee_location(employee=None, location=None, radius_meter=None):
-	_require_admin()
-	if not employee or not location:
-		return _fail("Employee and location are required.", "validation_error")
-	name = frappe.db.get_value("JEW Employee Location Assignment", {"employee": employee, "location": location}, "name")
+	_require_login()
+	if not _is_admin():
+		return _fail("You do not have permission to assign locations.", "permission_denied")
+	if not employee:
+		return _fail("Employee is required.", "validation_error")
+	if not location:
+		return _fail("Location is required.", "validation_error")
+	if not frappe.db.exists("Employee", employee):
+		return _fail("Employee is required.", "validation_error")
+	location_name = _resolve_attendance_location(location)
+	if not location_name:
+		return _fail("Selected location not found.", "not_found")
+	name = frappe.db.get_value("JEW Employee Location Assignment", {"employee": employee, "location": location_name}, "name")
 	doc = frappe.get_doc("JEW Employee Location Assignment", name) if name else frappe.new_doc("JEW Employee Location Assignment")
 	doc.employee = employee
-	doc.location = location
-	doc.radius_meter = int(radius_meter or frappe.db.get_value("JEW Attendance Location", location, "default_radius_meter") or 100)
+	doc.location = location_name
+	doc.radius_meter = int(radius_meter or frappe.db.get_value("JEW Attendance Location", location_name, "default_radius_meter") or 100)
 	doc.is_active = 1
-	doc.save()
+	doc.save(ignore_permissions=True)
 	frappe.db.commit()
-	return _ok({"assignment": doc.name}, "Location assigned")
+	return _ok({"assignment": doc.name, "employee": employee, "location": location_name}, "Location assigned successfully.")
 
 
 @frappe.whitelist()
@@ -1282,10 +1311,41 @@ def decide_regularization(name=None, action=None, remarks=None, manual_out_time=
 	return _ok({"regularization": doc.name, "status": doc.status}, "Regularization updated")
 
 
+def _employee_option(employee):
+	description = " · ".join([part for part in [employee.name, employee.department, employee.designation] if part])
+	return {
+		"value": employee.name,
+		"label": employee.employee_name or employee.name,
+		"description": description,
+	}
+
+
 @frappe.whitelist()
-def get_employee_list():
-	_require_approver()
-	employees = frappe.get_list("Employee", filters={"status": "Active"}, fields=["name", "employee_name", "department", "designation", "user_id"], order_by="employee_name asc", limit_page_length=200)
+def get_employee_list(search=None, limit=500):
+	denied = _require_employee_directory_access()
+	if denied:
+		return denied
+	limit = min(int(limit or 500), 1000)
+	filters = {"status": "Active"}
+	or_filters = None
+	if search:
+		search_text = f"%{str(search).strip()}%"
+		or_filters = [
+			["Employee", "name", "like", search_text],
+			["Employee", "employee_name", "like", search_text],
+			["Employee", "user_id", "like", search_text],
+			["Employee", "department", "like", search_text],
+			["Employee", "designation", "like", search_text],
+		]
+	employees = frappe.get_list(
+		"Employee",
+		filters=filters,
+		or_filters=or_filters,
+		fields=["name", "employee_name", "department", "designation", "user_id"],
+		order_by="employee_name asc",
+		limit_page_length=limit,
+		ignore_permissions=True,
+	)
 	for employee in employees:
 		face = _active_face(employee.name)
 		employee.face_registered = bool(face)
@@ -1293,5 +1353,5 @@ def get_employee_list():
 		employee.location_count = len(_assigned_locations(employee.name))
 		employee.value = employee.name
 		employee.label = employee.employee_name or employee.name
-		employee.description = " - ".join([part for part in [employee.name, employee.department, employee.designation] if part])
-	return _ok({"employees": employees})
+		employee.description = " · ".join([part for part in [employee.name, employee.department, employee.designation] if part])
+	return {"ok": True, "success": True, "message": "success", "code": "success", "error": None, "employees": employees, "data": [_employee_option(employee) for employee in employees], "count": len(employees), "roles": list(_roles())}
