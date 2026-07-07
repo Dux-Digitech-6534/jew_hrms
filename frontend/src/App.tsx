@@ -23,7 +23,7 @@ import {
   X,
   XCircle
 } from "lucide-react";
-import { Component, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Component, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { MapContainer, Marker, TileLayer, Circle, useMap, useMapEvents } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
@@ -85,7 +85,7 @@ const ADMIN_ACCESS_ROLES = [
 const ADMIN_VIEWS: ReadonlySet<View> = new Set<View>(["admin", "face", "location", "leaveApproval", "leavePolicy", "shiftPolicy", "regularization", "employees"]);
 
 function canAccessAdmin(userRoles: unknown) {
-  return Array.isArray(userRoles) && userRoles.some((role) => typeof role === "string" && ADMIN_ACCESS_ROLES.includes(role));
+  return Array.isArray(userRoles) && userRoles.some((role) => ADMIN_ACCESS_ROLES.includes(String(role).trim()));
 }
 
 function applyAdminRoleVisibility(userCaps: Partial<Caps>, userRoles: unknown): Caps {
@@ -573,8 +573,8 @@ function Login({ onDone, flash }: { onDone: () => void; flash: (title: string, m
     }
   }, []);
 
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
+  const submit = async () => {
+    if (busy) return;
     setBusy(true);
     try {
       await call(API.login, { email: username, password });
@@ -591,13 +591,19 @@ function Login({ onDone, flash }: { onDone: () => void; flash: (title: string, m
       setBusy(false);
     }
   };
+
+  const handleLoginKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Enter" && !busy) {
+      event.preventDefault();
+      void submit();
+    }
+  };
+
   return (
     <div className="shell">
       <div className="login-wrap">
-        <div className="login-logo"><img src={assets.logo} alt="DUX Digitech" /></div>
         <div className="login-hero"><div className="eyebrow">JAIN ENGINEERING WORKS</div><h1>JEW <span className="grad">HRMS</span></h1><p>Attendance, leave, face verification and employee self service in one secure mobile app.</p></div>
-        <form className="card accent login-card" onSubmit={submit}>
-          <div className="login-mascot"><img className="mascot-small" src={assets.mascot} alt="" /></div>
+        <div className="card accent login-card login-panel" role="group" aria-label="JEW HRMS login" onKeyDown={handleLoginKeyDown}>
           <div className="field">
             <label htmlFor="login-usr">Username / Email</label>
             <input
@@ -645,10 +651,10 @@ function Login({ onDone, flash }: { onDone: () => void; flash: (title: string, m
               <span>Remember password</span>
             </label>
           </div>
-          <button className="btn btn-primary btn-wide" type="submit" disabled={busy}>{busy ? "Signing in..." : "Sign In"}</button>
+          <button className="btn btn-primary btn-wide" type="button" onClick={() => void submit()} disabled={busy}>{busy ? "Signing in..." : "Sign In"}</button>
           <div className="module-strip"><div>Face</div><div>Location</div><div>Leave</div></div>
-        </form>
-        <div className="footer"><img src={assets.logo} alt="" /> Powered by DUX Digitech</div>
+        </div>
+        <div className="footer">Powered by DUX Digitech</div>
       </div>
     </div>
   );
