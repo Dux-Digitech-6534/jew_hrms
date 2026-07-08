@@ -87,8 +87,21 @@ export function cleanErrorMessage(error: unknown): string {
   if (raw.includes("TypeError") && raw.includes("mark_attendance")) {
     return "Unable to create Employee Checkin. Please contact admin.";
   }
-  if (raw.toLowerCase().includes("permission")) {
-    return "You do not have permission.";
+  // Only treat genuine backend permission denials as such. Do NOT flatten
+  // device-location/GPS messages (e.g. "enable location", "allow access") into
+  // an account-permission error — that misled users into thinking their
+  // account/employee lacked permission when GPS simply failed.
+  {
+    const lower = raw.toLowerCase();
+    const isLocationMessage = lower.includes("location") || lower.includes("gps");
+    const isBackendPermission =
+      lower.includes("not permitted") ||
+      lower.includes("do not have permission") ||
+      lower.includes("insufficient permission") ||
+      lower.includes("permissionerror");
+    if (isBackendPermission && !isLocationMessage) {
+      return "You do not have permission.";
+    }
   }
   if (raw.includes("Traceback") || raw.includes("_server_messages")) return FALLBACK_ERROR;
   return raw.replace(/^frappe\.exceptions\.[A-Za-z]+:\s*/, "").trim() || FALLBACK_ERROR;

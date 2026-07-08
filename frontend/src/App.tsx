@@ -966,17 +966,35 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: an
     return () => window.clearInterval(timer);
   }, []);
 
-  const getCurrentLocation = () => new Promise<GeolocationCoordinates>((resolve, reject) => {
-    if (!navigator.geolocation) {
-      reject(new Error("Location is not available on this device."));
-      return;
-    }
+  const requestPosition = (highAccuracy: boolean, timeout: number) => new Promise<GeolocationCoordinates>((resolve, reject) => {
     navigator.geolocation.getCurrentPosition(
       (pos) => resolve(pos.coords),
-      () => reject(new Error("Please allow location permission.")),
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 }
+      (err) => reject(err),
+      { enableHighAccuracy: highAccuracy, timeout, maximumAge: 30000 }
     );
   });
+
+  const getCurrentLocation = async (): Promise<GeolocationCoordinates> => {
+    if (!navigator.geolocation) {
+      throw new Error("Location is not available on this device.");
+    }
+    try {
+      return await requestPosition(true, 15000);
+    } catch (err: any) {
+      // GeolocationPositionError.PERMISSION_DENIED === 1: the OS/browser blocked
+      // location for this app. This is a device-location issue, NOT an account
+      // permission problem, so keep the wording specific to location.
+      if (err && err.code === 1) {
+        throw new Error("Location is turned off for this app. Please enable location/GPS and allow access, then try again.");
+      }
+      // POSITION_UNAVAILABLE (2) / TIMEOUT (3): retry once with coarse accuracy.
+      try {
+        return await requestPosition(false, 20000);
+      } catch {
+        throw new Error("Could not get your location. Please turn on GPS/location and try again in an open area.");
+      }
+    }
+  };
 
   const stopVerifyCamera = () => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -1284,7 +1302,7 @@ function LocationAdmin({ data, setData, flash, reload }: any) {
     await runAction("use-current-location", async () => {
       if (!navigator.geolocation) throw new Error("Location is not available on this device.");
       const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, () => reject(new Error("Please allow location permission.")), {
+        navigator.geolocation.getCurrentPosition(resolve, () => reject(new Error("Could not get your location. Please turn on GPS/location and try again.")), {
           enableHighAccuracy: true,
           timeout: 15000,
           maximumAge: 0
