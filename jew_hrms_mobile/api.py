@@ -23,6 +23,11 @@ ADMIN_ROLES = {"Administrator", "System Manager", "HR Manager", "HR User", "JEW 
 OWNER_ROLES = {"Administrator", "System Manager", "JEW HRMS Owner"}
 HR_ROLES = {"HR Manager", "HR User", "Leave Approver", "JEW HRMS HR"}
 APPROVER_ROLES = ADMIN_ROLES | HR_ROLES
+# Access to the JEW HRMS mobile ADMIN panel is limited to these app-specific
+# roles only — deliberately NOT the broad ERP roles (System Manager, HR Manager,
+# HR User, Leave Approver), which belong to the wider ERP and must not grant
+# mobile-admin access.
+JEW_ADMIN_ROLES = {"JEW HRMS Admin", "JEW HRMS HR", "JEW HRMS Owner"}
 EMPLOYEE_ROLES = {"Employee", "JEW HRMS Employee"}
 REQUIRED_LEAVE_TYPES = {
 	"CL": "Casual Leave",
@@ -91,6 +96,11 @@ def _is_approver(user=None):
 	return _has_any(APPROVER_ROLES, user)
 
 
+def _can_access_admin(user=None):
+	"""True only for the JEW HRMS mobile admin roles (not broad ERP roles)."""
+	return _has_any(JEW_ADMIN_ROLES, user)
+
+
 def _require_login():
 	if not frappe.session.user or frappe.session.user == "Guest":
 		frappe.throw(_("Login required"), frappe.PermissionError)
@@ -98,19 +108,19 @@ def _require_login():
 
 def _require_admin():
 	_require_login()
-	if not _is_admin():
+	if not _can_access_admin():
 		frappe.throw(_("Permission denied"), frappe.PermissionError)
 
 
 def _require_approver():
 	_require_login()
-	if not _is_approver():
+	if not _can_access_admin():
 		frappe.throw(_("Permission denied"), frappe.PermissionError)
 
 
 def _require_employee_directory_access():
 	_require_login()
-	if not (_is_admin() or _is_hr() or _is_owner()):
+	if not _can_access_admin():
 		return _fail("You do not have permission.", "permission_denied")
 	return None
 
@@ -582,8 +592,8 @@ def capabilities():
 		"can_apply_leave": has_employee,
 		"can_register_face": is_admin,
 		"can_manage_locations": is_admin,
-		"can_approve_leave": is_approver,
-		"can_view_admin": is_admin or is_approver,
+		"can_approve_leave": is_approver and _can_access_admin(),
+		"can_view_admin": _can_access_admin(),
 		"can_manage_leave_policy": is_admin or is_hr,
 		"can_manage_shift_policy": is_admin or is_hr,
 		"can_manage_regularization": is_admin or is_hr,
@@ -889,7 +899,7 @@ def _resolve_attendance_location(location):
 @frappe.whitelist()
 def assign_employee_location(employee=None, location=None, radius_meter=None):
 	_require_login()
-	if not _is_admin():
+	if not _can_access_admin():
 		return _fail("You do not have permission to assign locations.", "permission_denied")
 	if not employee:
 		return _fail("Employee is required.", "validation_error")
