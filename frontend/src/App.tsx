@@ -1,34 +1,9 @@
-import {
-  ArrowLeft,
-  Bell,
-  CalendarDays,
-  Camera,
-  CheckCircle2,
-  ChevronRight,
-  Clock3,
-  Eye,
-  EyeOff,
-  HelpCircle,
-  Home,
-  LogOut,
-  Menu,
-  MapPin,
-  Moon,
-  RefreshCw,
-  Settings as SettingsIcon,
-  ShieldCheck,
-  Sun,
-  UserRound,
-  Users,
-  X,
-  XCircle
-} from "lucide-react";
 import { Component, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { MapContainer, Marker, TileLayer, Circle, useMap, useMapEvents } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { API, call, cleanErrorMessage, logout } from "./api";
-import { assets } from "./assets";
+import { IconSprite, Ic } from "./icons";
 
 type Caps = {
   can_mark_attendance: boolean;
@@ -47,41 +22,19 @@ type Caps = {
 };
 
 type View =
-  | "dashboard"
-  | "attendance"
-  | "history"
-  | "leave"
-  | "admin"
-  | "face"
-  | "location"
-  | "leaveApproval"
-  | "leavePolicy"
-  | "shiftPolicy"
-  | "regularization"
-  | "employees"
-  | "notifications"
-  | "profile"
-  | "settings";
+  | "dashboard" | "attendance" | "history" | "leave" | "admin" | "face" | "location"
+  | "leaveApproval" | "leavePolicy" | "shiftPolicy" | "regularization" | "employees"
+  | "notifications" | "profile" | "settings";
 
 const DENY: Caps = {
-  can_mark_attendance: false,
-  can_apply_leave: false,
-  can_register_face: false,
-  can_manage_locations: false,
-  can_approve_leave: false,
-  can_view_admin: false,
-  can_manage_leave_policy: false,
-  can_manage_shift_policy: false,
-  can_manage_regularization: false,
+  can_mark_attendance: false, can_apply_leave: false, can_register_face: false,
+  can_manage_locations: false, can_approve_leave: false, can_view_admin: false,
+  can_manage_leave_policy: false, can_manage_shift_policy: false, can_manage_regularization: false,
   is_admin: false
 };
 
 const REMEMBER_LOGIN_KEY = "jew_hrms_remember_login";
-const ADMIN_ACCESS_ROLES = [
-  "JEW HRMS Admin",
-  "JEW HRMS HR",
-  "JEW HRMS Owner"
-];
+const ADMIN_ACCESS_ROLES = ["JEW HRMS Admin", "JEW HRMS HR", "JEW HRMS Owner"];
 const ADMIN_VIEWS: ReadonlySet<View> = new Set<View>(["admin", "face", "location", "leaveApproval", "leavePolicy", "shiftPolicy", "regularization", "employees"]);
 
 function canAccessAdmin(userRoles: unknown) {
@@ -122,9 +75,7 @@ function formatWorkingHours(start?: string, end?: string) {
   const outDate = new Date(end);
   if (Number.isNaN(inDate.getTime()) || Number.isNaN(outDate.getTime())) return "-";
   const minutes = Math.max(0, Math.round((outDate.getTime() - inDate.getTime()) / 60000));
-  const hrs = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-  return `${hrs}h ${mins}m`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
 function hasActiveFrappeUserCookie() {
@@ -134,45 +85,26 @@ function hasActiveFrappeUserCookie() {
   });
 }
 
-export class ErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
-  state = { failed: false };
-
-  static getDerivedStateFromError() {
-    return { failed: true };
-  }
-
-  render() {
-    if (this.state.failed) {
-      return (
-        <div className="shell center">
-          <div className="card accent card-pad app-error">
-            <XCircle size={24} />
-            <h2>Unable to load JEW HRMS.</h2>
-            <p>Please refresh or contact admin.</p>
-          </div>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
+function today() {
+  return new Date().toISOString().slice(0, 10);
 }
 
-const navMeta: Record<View, { title: string; sub: string; nav?: string }> = {
-  dashboard: { title: "JEW HRMS", sub: "Employee Dashboard", nav: "dashboard" },
-  attendance: { title: "Attendance", sub: "Face + Location", nav: "attendance" },
-  history: { title: "Attendance", sub: "Monthly Records", nav: "attendance" },
-  leave: { title: "Leave", sub: "Employee Self Service", nav: "leave" },
-  admin: { title: "Admin Panel", sub: "HR Controls", nav: "admin" },
-  face: { title: "Face Register", sub: "Admin Module", nav: "admin" },
-  location: { title: "Location", sub: "Geofence Setup", nav: "admin" },
-  leaveApproval: { title: "Leave Approval", sub: "Approver View", nav: "admin" },
-  leavePolicy: { title: "Leave Policy", sub: "HR Configuration", nav: "admin" },
-  shiftPolicy: { title: "Shift Policy", sub: "Attendance Rules", nav: "admin" },
-  regularization: { title: "Regularization", sub: "Pending Review", nav: "admin" },
-  employees: { title: "Employees", sub: "Admin Overview", nav: "admin" },
-  notifications: { title: "Notifications", sub: "Alerts", nav: "dashboard" },
-  profile: { title: "Profile", sub: "Employee Details", nav: "profile" },
-  settings: { title: "Settings", sub: "App Info", nav: "profile" }
+const navMeta: Record<View, { title: string; sub: string; nav?: string; back?: boolean }> = {
+  dashboard: { title: "JEW HRMS", sub: "Jain Engineering Works", nav: "dashboard" },
+  attendance: { title: "Attendance", sub: "Mark in / out", nav: "attendance" },
+  history: { title: "History", sub: "My records", nav: "attendance", back: true },
+  leave: { title: "Leave", sub: "Apply & track", nav: "leave" },
+  admin: { title: "Admin", sub: "Manager access", nav: "admin" },
+  face: { title: "Face register", sub: "Enroll template", nav: "admin", back: true },
+  location: { title: "Geofence", sub: "Work sites", nav: "admin", back: true },
+  leaveApproval: { title: "Leave approval", sub: "Pending requests", nav: "admin", back: true },
+  leavePolicy: { title: "Leave policy", sub: "Leave types", nav: "admin", back: true },
+  shiftPolicy: { title: "Shift policy", sub: "Attendance rules", nav: "admin", back: true },
+  regularization: { title: "Regularization", sub: "Pending review", nav: "admin", back: true },
+  employees: { title: "Employees", sub: "Directory", nav: "admin", back: true },
+  notifications: { title: "Notifications", sub: "Alerts & reminders", nav: "dashboard", back: true },
+  profile: { title: "Profile", sub: "My details", nav: "profile" },
+  settings: { title: "Settings", sub: "Preferences", nav: "profile", back: true }
 };
 
 function toastText(code?: string) {
@@ -189,7 +121,6 @@ function toastText(code?: string) {
 
 function useActionRunner(flash: (title: string, msg: string) => void) {
   const [busyAction, setBusyAction] = useState<string | null>(null);
-
   const runAction = async <T,>(
     key: string,
     action: () => Promise<T>,
@@ -199,9 +130,7 @@ function useActionRunner(flash: (title: string, msg: string) => void) {
     setBusyAction(key);
     try {
       const result: any = await action();
-      if (options.successTitle) {
-        flash(options.successTitle, options.successMessage || result?.message || "Done.");
-      }
+      if (options.successTitle) flash(options.successTitle, options.successMessage || result?.message || "Done.");
       return result;
     } catch (error) {
       flash(options.errorTitle || "Action failed", cleanErrorMessage(error));
@@ -210,14 +139,11 @@ function useActionRunner(flash: (title: string, msg: string) => void) {
       setBusyAction(null);
     }
   };
-
   return { busyAction, runAction, isBusy: (key: string) => busyAction === key, isAnyBusy: Boolean(busyAction) };
 }
 
 function PickLocation({ onPick }: { onPick: (lat: number, lng: number) => void }) {
-  useMapEvents({
-    click: (event: any) => onPick(event.latlng.lat, event.latlng.lng)
-  });
+  useMapEvents({ click: (event: any) => onPick(event.latlng.lat, event.latlng.lng) });
   return null;
 }
 
@@ -229,10 +155,25 @@ function MapRecenter({ center }: { center: [number, number] }) {
   return null;
 }
 
+export class ErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  render() {
+    if (this.state.failed) {
+      return (
+        <div className="shell center"><IconSprite />
+          <div className="app-error"><Ic name="close" style={{ width: 26, height: 26, color: "var(--err)" }} /><h2>Unable to load JEW HRMS.</h2><p>Please refresh or contact admin.</p></div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
   const [theme, setTheme] = useState(localStorage.getItem("jew-theme") || "light");
   const [loggedIn, setLoggedIn] = useState<boolean | null>(null);
-  const [view, setView] = useState<View>(() => (location.pathname.includes("/m") ? "dashboard" : "dashboard"));
+  const [view, setView] = useState<View>("dashboard");
   const [viewStack, setViewStack] = useState<View[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -256,6 +197,8 @@ export default function App() {
     StatusBar?.setOverlaysWebView?.({ overlay: false }).catch?.(() => undefined);
     StatusBar?.setBackgroundColor?.({ color: theme === "dark" ? "#0A0D13" : "#F3F4F7" }).catch?.(() => undefined);
     StatusBar?.setStyle?.({ style: theme === "dark" ? "LIGHT" : "DARK" }).catch?.(() => undefined);
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", theme === "dark" ? "#0A0D13" : "#5C4DE6");
   }, [theme]);
 
   const flash = (title: string, msg: string) => {
@@ -266,27 +209,15 @@ export default function App() {
   const resetSessionState = () => {
     window.dispatchEvent(new Event("jew-hrms-stop-camera"));
     window.dispatchEvent(new Event("jew-hrms-close-attendance-verify"));
-    setSession(null);
-    setDashboard(null);
-    setProfile(null);
-    setHistory(null);
-    setLeaveData({});
-    setAdminData({});
-    setSelectedEmployee("");
-    setNotifications([]);
-    setCaps(DENY);
-    setView("dashboard");
-    setViewStack([]);
-    setMenuOpen(false);
-    setRefreshing(false);
-    setCameraActive(false);
+    setSession(null); setDashboard(null); setProfile(null); setHistory(null);
+    setLeaveData({}); setAdminData({}); setSelectedEmployee(""); setNotifications([]);
+    setCaps(DENY); setView("dashboard"); setViewStack([]); setMenuOpen(false);
+    setRefreshing(false); setCameraActive(false);
   };
 
   const loadBase = async (force = false) => {
     if (!force && !hasActiveFrappeUserCookie()) {
-      resetSessionState();
-      setLoggedIn(false);
-      return;
+      resetSessionState(); setLoggedIn(false); return;
     }
     try {
       const user = await call(API.getSessionUser);
@@ -294,32 +225,22 @@ export default function App() {
       setSession(user);
       setCaps(applyAdminRoleVisibility(c, user?.roles));
       setLoggedIn(true);
-      try {
-        const dash = await call(API.getDashboard);
-        setDashboard(dash);
-      } catch {
-        setDashboard(null);
-      }
+      try { setDashboard(await call(API.getDashboard)); } catch { setDashboard(null); }
     } catch {
-      resetSessionState();
-      setLoggedIn(false);
+      resetSessionState(); setLoggedIn(false);
     }
   };
 
   const handleLogout = async () => {
     try {
-      await logout();
-      resetSessionState();
-      setLoggedIn(false);
+      await logout(); resetSessionState(); setLoggedIn(false);
       flash("Logged out", "You have returned to JEW HRMS login.");
     } catch (error) {
       flash("Logout failed", cleanErrorMessage(error));
     }
   };
 
-  useEffect(() => {
-    loadBase();
-  }, []);
+  useEffect(() => { loadBase(); }, []);
 
   const loadViewData = async (next: View) => {
     if (ADMIN_VIEWS.has(next) && !caps.can_view_admin) return;
@@ -335,18 +256,9 @@ export default function App() {
       const [types, dash, mine, employees] = await Promise.all(calls);
       setLeaveData({ types: types.leave_types, balances: dash.balances, leaves: mine.leaves, employees: employees?.employees || [] });
     }
-    if (next === "profile") {
-      const p = await call(API.getEmployeeProfile);
-      setProfile(p.employee_profile);
-    }
-    if (next === "notifications") {
-      const n = await call(API.getNotifications);
-      setNotifications(n.notifications || []);
-    }
-    if (next === "admin") {
-      const dash = await call(API.getDashboard);
-      setDashboard(dash);
-    }
+    if (next === "profile") setProfile((await call(API.getEmployeeProfile)).employee_profile);
+    if (next === "notifications") setNotifications((await call(API.getNotifications)).notifications || []);
+    if (next === "admin") setDashboard(await call(API.getDashboard));
     if (next === "face" && caps.can_register_face) {
       const employees = await call(API.getEmployeeList);
       setAdminData((prev: any) => ({ ...prev, employees: employees.employees }));
@@ -381,176 +293,138 @@ export default function App() {
   const open = async (next: View, options: { replace?: boolean; silent?: boolean } = {}) => {
     if (ADMIN_VIEWS.has(next) && !caps.can_view_admin) {
       flash("Not permitted", "You do not have access to this admin screen.");
-      if (view !== "dashboard") {
-        setView("dashboard");
-        setViewStack([]);
-      }
+      if (view !== "dashboard") { setView("dashboard"); setViewStack([]); }
       return;
     }
-    if (next === "face" && !caps.can_register_face) {
-      flash("Not permitted", "You do not have access to face registration.");
-      return;
-    }
-    if (next === "location" && !caps.can_manage_locations) {
-      flash("Not permitted", "You do not have access to location setup.");
-      return;
-    }
-    if (next === "employees" && !caps.can_view_admin) {
-      flash("Not permitted", "You do not have access to employee list.");
-      return;
-    }
-    if (next === "leaveApproval" && !caps.can_approve_leave) {
-      flash("Not permitted", "You do not have approval permission.");
-      return;
-    }
-    if (next === "leavePolicy" && !caps.can_manage_leave_policy) {
-      flash("Not permitted", "You do not have access to leave policy.");
-      return;
-    }
-    if (next === "shiftPolicy" && !caps.can_manage_shift_policy) {
-      flash("Not permitted", "You do not have access to shift policy.");
-      return;
-    }
-    if (next === "regularization" && !caps.can_manage_regularization) {
-      flash("Not permitted", "You do not have access to regularization.");
-      return;
-    }
+    if (next === "face" && !caps.can_register_face) { flash("Not permitted", "You do not have access to face registration."); return; }
+    if (next === "location" && !caps.can_manage_locations) { flash("Not permitted", "You do not have access to location setup."); return; }
+    if (next === "employees" && !caps.can_view_admin) { flash("Not permitted", "You do not have access to employee list."); return; }
+    if (next === "leaveApproval" && !caps.can_approve_leave) { flash("Not permitted", "You do not have approval permission."); return; }
+    if (next === "leavePolicy" && !caps.can_manage_leave_policy) { flash("Not permitted", "You do not have access to leave policy."); return; }
+    if (next === "shiftPolicy" && !caps.can_manage_shift_policy) { flash("Not permitted", "You do not have access to shift policy."); return; }
+    if (next === "regularization" && !caps.can_manage_regularization) { flash("Not permitted", "You do not have access to regularization."); return; }
     setMenuOpen(false);
-    if (!options.replace && next !== view) {
-      setViewStack((stack) => [...stack, view].slice(-12));
-    }
+    if (!options.replace && next !== view) setViewStack((stack) => [...stack, view].slice(-12));
     setView(next);
-    try {
-      await loadViewData(next);
-    } catch (error: any) {
-      if (!options.silent) flash("Unable to load", cleanErrorMessage(error));
-    }
+    try { await loadViewData(next); }
+    catch (error: any) { if (!options.silent) flash("Unable to load", cleanErrorMessage(error)); }
   };
 
   const goBack = () => {
     if (cameraActive) {
       window.dispatchEvent(new Event("jew-hrms-stop-camera"));
       window.dispatchEvent(new Event("jew-hrms-close-attendance-verify"));
-      setCameraActive(false);
-      return;
+      setCameraActive(false); return;
     }
-    if (menuOpen) {
-      setMenuOpen(false);
-      return;
-    }
+    if (menuOpen) { setMenuOpen(false); return; }
     if (viewStack.length) {
       const previous = viewStack[viewStack.length - 1];
       setViewStack((stack) => stack.slice(0, -1));
-      open(previous, { replace: true, silent: true });
-      return;
+      open(previous, { replace: true, silent: true }); return;
     }
-    if (view !== "dashboard") {
-      open("dashboard", { replace: true, silent: true });
-      return;
-    }
+    if (view !== "dashboard") { open("dashboard", { replace: true, silent: true }); return; }
     const now = Date.now();
-    if (now - lastBackRef.current < 2000) {
-      capacitorPlugin("App")?.exitApp?.();
-      return;
-    }
+    if (now - lastBackRef.current < 2000) { capacitorPlugin("App")?.exitApp?.(); return; }
     lastBackRef.current = now;
     flash("Exit", "Press back again to exit.");
   };
 
   const refreshCurrent = async () => {
     setRefreshing(true);
-    try {
-      await loadViewData(view);
-    } catch (error) {
-      flash("Unable to refresh", cleanErrorMessage(error));
-    } finally {
-      setRefreshing(false);
-    }
+    try { await loadViewData(view); }
+    catch (error) { flash("Unable to refresh", cleanErrorMessage(error)); }
+    finally { setRefreshing(false); }
   };
 
   useEffect(() => {
     const AppPlugin = capacitorPlugin("App");
     let handle: any;
-    AppPlugin?.addListener?.("backButton", () => goBack())?.then?.((listener: any) => {
-      handle = listener;
-    });
-    return () => {
-      handle?.remove?.();
-    };
+    AppPlugin?.addListener?.("backButton", () => goBack())?.then?.((listener: any) => { handle = listener; });
+    return () => { handle?.remove?.(); };
   }, [cameraActive, menuOpen, view, viewStack]);
 
   useEffect(() => {
     if (loggedIn && ADMIN_VIEWS.has(view) && !caps.can_view_admin) {
-      setView("dashboard");
-      setViewStack([]);
+      setView("dashboard"); setViewStack([]);
       flash("Not permitted", "You do not have access to this admin screen.");
     }
   }, [caps.can_view_admin, loggedIn, view]);
 
   const navItems = useMemo(() => {
-    const items = [
-      { id: "dashboard", label: "Home", icon: <Home size={19} />, view: "dashboard" as View },
-      ...(caps.can_mark_attendance ? [{ id: "attendance", label: "Attendance", icon: <Clock3 size={19} />, view: "attendance" as View }] : []),
-      ...(caps.can_view_admin ? [{ id: "admin", label: "Admin", icon: <ShieldCheck size={19} />, view: "admin" as View }] : []),
-      { id: "profile", label: "Profile", icon: <UserRound size={19} />, view: "profile" as View }
-    ];
-    return items;
-  }, [caps.can_mark_attendance, caps.can_view_admin]);
+    return [
+      { id: "dashboard", label: "Home", icon: "home", view: "dashboard" as View, show: true },
+      { id: "attendance", label: "Attend", icon: "clock", view: "attendance" as View, show: caps.can_mark_attendance },
+      { id: "leave", label: "Leave", icon: "leaf", view: "leave" as View, show: caps.can_apply_leave },
+      { id: "admin", label: "Admin", icon: "shield", view: "admin" as View, show: caps.can_view_admin },
+      { id: "profile", label: "Profile", icon: "user", view: "profile" as View, show: true }
+    ].filter((i) => i.show);
+  }, [caps.can_mark_attendance, caps.can_apply_leave, caps.can_view_admin]);
 
   if (loggedIn === null) {
-    return <div className="shell center"><div className="loader">Loading JEW HRMS</div></div>;
+    return <div className="shell center"><IconSprite /><div className="loader">Loading JEW HRMS…</div></div>;
   }
-
   if (!loggedIn) {
-    return <Login onDone={() => loadBase(true)} flash={flash} />;
+    return <><IconSprite /><Login onDone={() => loadBase(true)} flash={flash} /></>;
   }
 
   const meta = navMeta[view];
+  const canBack = viewStack.length > 0 || Boolean(meta.back);
+
   return (
     <ErrorBoundary>
-    <div className="shell">
-      <header className="topbar">
-        <button className="icon-btn" onClick={goBack} aria-label="Back"><ArrowLeft size={18} /></button>
-        <div className="brand">
-          <picture><source srcSet={assets.logoWhite} media="(prefers-color-scheme: dark)" /><img className="logo" src={theme === "dark" ? assets.logoWhite : assets.logo} alt="DUX Digitech" /></picture>
-          <div className="brand-title"><strong>{meta.title}</strong><span>{meta.sub}</span></div>
-        </div>
-        <div className="top-actions">
-          <button className="icon-btn" onClick={() => setMenuOpen(true)} aria-label="Menu"><Menu size={19} /></button>
-          <button className="icon-btn" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} aria-label="Toggle theme">{theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}</button>
-        </div>
-      </header>
+      <IconSprite />
+      <div className="shell">
+        <header className="topbar">
+          {canBack
+            ? <button className="back" onClick={goBack} aria-label="Back"><Ic name="chevron" /></button>
+            : <button className="ibtn plain" onClick={() => setMenuOpen(true)} aria-label="Menu"><Ic name="menu" style={{ width: 22, height: 22 }} /></button>}
+          <div className="brand">
+            <span className="mark"><Ic name="jmark" className="" style={{ width: 22, height: 22 }} /></span>
+            <span className="brand-t"><strong>{meta.title}</strong><span>{meta.sub}</span></span>
+          </div>
+          <div className="top-actions">
+            <button className="ibtn" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} aria-label="Theme"><Ic name={theme === "dark" ? "sun" : "moon"} /></button>
+            <button className="ibtn" onClick={() => open("notifications")} aria-label="Notifications"><Ic name="bell" /><span className="dot" /></button>
+          </div>
+        </header>
 
-      <PullToRefresh onRefresh={refreshCurrent} refreshing={refreshing}>
-      <main className="page active">
-        {view === "dashboard" && <Dashboard data={dashboard} open={open} caps={caps} flash={flash} />}
-        {view === "attendance" && <Attendance flash={flash} open={open} initialStatus={adminData.attendanceStatus} onCameraActiveChange={setCameraActive} onMarked={async () => { setDashboard(await call(API.getDashboard)); const status = await call(API.getTodayAttendanceStatus); setAdminData((prev: any) => ({ ...prev, attendanceStatus: status })); }} />}
-        {view === "history" && <History data={history} />}
-        {view === "leave" && <Leave data={leaveData} caps={caps} flash={flash} reload={() => open("leave")} />}
-        {view === "admin" && (caps.can_view_admin ? <Admin open={open} caps={caps} /> : <NotPermitted />)}
-        {view === "face" && (caps.can_view_admin && caps.can_register_face ? <FaceAdmin employees={adminData.employees || []} flash={flash} selectedEmployee={selectedEmployee} onCameraActiveChange={setCameraActive} /> : <NotPermitted />)}
-        {view === "location" && (caps.can_view_admin && caps.can_manage_locations ? <LocationAdmin data={adminData} setData={setAdminData} flash={flash} reload={() => open("location")} /> : <NotPermitted />)}
-        {view === "leaveApproval" && (caps.can_view_admin && caps.can_approve_leave ? <LeaveApproval leaves={adminData.pendingLeaves || []} flash={flash} reload={() => open("leaveApproval")} /> : <NotPermitted />)}
-        {view === "leavePolicy" && (caps.can_view_admin && caps.can_manage_leave_policy ? <LeavePolicy types={adminData.leaveTypes || []} flash={flash} reload={() => open("leavePolicy")} /> : <NotPermitted />)}
-        {view === "shiftPolicy" && (caps.can_view_admin && caps.can_manage_shift_policy ? <ShiftPolicy policies={adminData.shiftPolicies || []} flash={flash} reload={() => open("shiftPolicy")} /> : <NotPermitted />)}
-        {view === "regularization" && (caps.can_view_admin && caps.can_manage_regularization ? <Regularization items={adminData.regularizations || []} flash={flash} reload={() => open("regularization")} /> : <NotPermitted />)}
-        {view === "employees" && (caps.can_view_admin ? <Employees employees={adminData.employees || []} open={open} selectEmployee={setSelectedEmployee} /> : <NotPermitted />)}
-        {view === "notifications" && <Notifications items={notifications} />}
-        {view === "profile" && <Profile profile={profile} open={open} onLogout={handleLogout} />}
-        {view === "settings" && <Settings theme={theme} setTheme={setTheme} onLogout={handleLogout} />}
-      </main>
-      </PullToRefresh>
+        <PullToRefresh onRefresh={refreshCurrent} refreshing={refreshing}>
+          <main className={`page ${ADMIN_VIEWS.has(view) || view === "history" || view === "notifications" || view === "settings" ? "noTab" : ""}`}>
+            {view === "dashboard" && <Dashboard data={dashboard} open={open} caps={caps} flash={flash} session={session} />}
+            {view === "attendance" && <Attendance flash={flash} open={open} initialStatus={adminData.attendanceStatus} onCameraActiveChange={setCameraActive} onMarked={async () => { setDashboard(await call(API.getDashboard)); const status = await call(API.getTodayAttendanceStatus); setAdminData((prev: any) => ({ ...prev, attendanceStatus: status })); }} />}
+            {view === "history" && <History data={history} />}
+            {view === "leave" && <Leave data={leaveData} caps={caps} flash={flash} reload={() => open("leave")} />}
+            {view === "admin" && (caps.can_view_admin ? <Admin open={open} caps={caps} data={adminData} /> : <NotPermitted />)}
+            {view === "face" && (caps.can_view_admin && caps.can_register_face ? <FaceAdmin employees={adminData.employees || []} flash={flash} selectedEmployee={selectedEmployee} onCameraActiveChange={setCameraActive} /> : <NotPermitted />)}
+            {view === "location" && (caps.can_view_admin && caps.can_manage_locations ? <LocationAdmin data={adminData} setData={setAdminData} flash={flash} reload={() => open("location")} /> : <NotPermitted />)}
+            {view === "leaveApproval" && (caps.can_view_admin && caps.can_approve_leave ? <LeaveApproval leaves={adminData.pendingLeaves || []} flash={flash} reload={() => open("leaveApproval")} /> : <NotPermitted />)}
+            {view === "leavePolicy" && (caps.can_view_admin && caps.can_manage_leave_policy ? <LeavePolicy types={adminData.leaveTypes || []} flash={flash} reload={() => open("leavePolicy")} /> : <NotPermitted />)}
+            {view === "shiftPolicy" && (caps.can_view_admin && caps.can_manage_shift_policy ? <ShiftPolicy policies={adminData.shiftPolicies || []} flash={flash} reload={() => open("shiftPolicy")} /> : <NotPermitted />)}
+            {view === "regularization" && (caps.can_view_admin && caps.can_manage_regularization ? <Regularization items={adminData.regularizations || []} flash={flash} reload={() => open("regularization")} /> : <NotPermitted />)}
+            {view === "employees" && (caps.can_view_admin ? <Employees employees={adminData.employees || []} open={open} selectEmployee={setSelectedEmployee} /> : <NotPermitted />)}
+            {view === "notifications" && <Notifications items={notifications} />}
+            {view === "profile" && <Profile profile={profile} open={open} onLogout={handleLogout} />}
+            {view === "settings" && <Settings theme={theme} setTheme={setTheme} onLogout={handleLogout} />}
+          </main>
+        </PullToRefresh>
 
-      <nav className="bottom-nav" style={{ gridTemplateColumns: `repeat(${navItems.length},1fr)` }}>
-        {navItems.map((item) => {
-          return <button key={item.id} className={meta.nav === item.id ? "active" : ""} onClick={() => open(item.view)}><span className="nav-ico">{item.icon}</span><span>{item.label}</span></button>;
-        })}
-      </nav>
-      <MenuDrawer open={menuOpen} caps={caps} active={view} openView={open} onClose={() => setMenuOpen(false)} onLogout={handleLogout} />
-      {toast && <div className="toast-stack"><div className="toast"><CheckCircle2 size={18} /><div><b>{toast.title}</b><span>{toast.msg}</span></div></div></div>}
-    </div>
+        <nav className="tabbar">
+          {navItems.map((item) => (
+            <button key={item.id} className={`tab ${meta.nav === item.id ? "on" : ""}`} onClick={() => open(item.view)}>
+              <Ic name={item.icon} style={{ width: 22, height: 22 }} /><span>{item.label}</span>
+            </button>
+          ))}
+        </nav>
+
+        <MenuDrawer open={menuOpen} caps={caps} active={view} session={session} openView={open} onClose={() => setMenuOpen(false)} onLogout={handleLogout} />
+        {toast && <div className="toast-stack"><div className="toast"><Ic name="check" /><div><b>{toast.title}</b><span>{toast.msg}</span></div></div></div>}
+      </div>
     </ErrorBoundary>
   );
+}
+
+function empInitials(name?: string) {
+  return (name || "").split(" ").filter(Boolean).slice(0, 2).map((p) => p[0]).join("").toUpperCase() || "JE";
 }
 
 function Login({ onDone, flash }: { onDone: () => void; flash: (title: string, msg: string) => void }) {
@@ -563,14 +437,8 @@ function Login({ onDone, flash }: { onDone: () => void; flash: (title: string, m
   useEffect(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(REMEMBER_LOGIN_KEY) || "null");
-      if (saved?.username && saved?.password) {
-        setUsername(saved.username);
-        setPassword(saved.password);
-        setRememberPassword(true);
-      }
-    } catch {
-      localStorage.removeItem(REMEMBER_LOGIN_KEY);
-    }
+      if (saved?.username && saved?.password) { setUsername(saved.username); setPassword(saved.password); setRememberPassword(true); }
+    } catch { localStorage.removeItem(REMEMBER_LOGIN_KEY); }
   }, []);
 
   const submit = async () => {
@@ -578,105 +446,59 @@ function Login({ onDone, flash }: { onDone: () => void; flash: (title: string, m
     setBusy(true);
     try {
       await call(API.login, { email: username, password });
-      if (rememberPassword) {
-        localStorage.setItem(REMEMBER_LOGIN_KEY, JSON.stringify({ username, password }));
-      } else {
-        localStorage.removeItem(REMEMBER_LOGIN_KEY);
-      }
+      if (rememberPassword) localStorage.setItem(REMEMBER_LOGIN_KEY, JSON.stringify({ username, password }));
+      else localStorage.removeItem(REMEMBER_LOGIN_KEY);
       flash("Login successful", "Welcome to Jain Engineering Works HRMS");
       await onDone();
     } catch (error: any) {
       flash("Login failed", cleanErrorMessage(error) || "Invalid credentials");
-    } finally {
-      setBusy(false);
-    }
+    } finally { setBusy(false); }
   };
 
-  const handleLoginKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (event.key === "Enter" && !busy) {
-      event.preventDefault();
-      void submit();
-    }
+  const onKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Enter" && !busy) { event.preventDefault(); void submit(); }
   };
 
   return (
     <div className="shell">
-      <div className="login-wrap">
-        <div className="login-hero"><div className="eyebrow">JAIN ENGINEERING WORKS</div><h1>JEW <span className="grad">HRMS</span></h1><p>Attendance, leave, face verification and employee self service in one secure mobile app.</p></div>
-        <div className="card accent login-card login-panel" role="group" aria-label="JEW HRMS login" onKeyDown={handleLoginKeyDown}>
-          <div className="field">
-            <label htmlFor="login-usr">Employee ID / Email</label>
-            <input
-              id="login-usr"
-              className="input"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              type="text"
-              name="usr"
-              autoComplete="username"
-              inputMode="text"
-              placeholder="Employee ID or email"
-              required
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="login-pwd">Password</label>
-            <div className="password-input">
-              <input
-                id="login-pwd"
-                className="input"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                type={showPassword ? "text" : "password"}
-                name="pwd"
-                autoComplete="current-password"
-                required
-              />
-              <button className="password-toggle" type="button" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? "Hide password" : "Show password"}>
-                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-          </div>
-          <div className="login-options">
-            <label className="remember-check">
-              <input
-                type="checkbox"
-                checked={rememberPassword}
-                onChange={(event) => {
-                  const checked = event.target.checked;
-                  setRememberPassword(checked);
-                  if (!checked) localStorage.removeItem(REMEMBER_LOGIN_KEY);
-                }}
-              />
-              <span>Keep me signed in</span>
-            </label>
-          </div>
-          <button className="btn btn-primary btn-wide" type="button" onClick={() => void submit()} disabled={busy}>{busy ? "Signing in..." : "Sign In"}</button>
-          <div className="module-strip"><div>Face</div><div>Location</div><div>Leave</div></div>
+      <div className="login-wrap" onKeyDown={onKey}>
+        <div className="login-mark"><Ic name="jmark" className="" style={{ width: 46, height: 46 }} /></div>
+        <p className="eyebrow" style={{ textAlign: "center" }}>JEWIPL Employee app</p>
+        <h1 className="h1" style={{ textAlign: "center" }}>Welcome <span className="g">back</span></h1>
+        <p className="sub" style={{ textAlign: "center" }}>Sign in to mark attendance and manage your leave.</p>
+        <div className="field">
+          <label>Employee ID or email</label>
+          <div className="inp"><Ic name="user" /><input value={username} onChange={(e) => setUsername(e.target.value)} type="text" name="usr" autoComplete="username" placeholder="EMP-00148 or email" /></div>
         </div>
-        <div className="footer">Powered by DUX Digitech</div>
+        <div className="field">
+          <label>Password</label>
+          <div className="inp">
+            <input value={password} onChange={(e) => setPassword(e.target.value)} type={showPassword ? "text" : "password"} name="pwd" autoComplete="current-password" placeholder="••••••••" />
+            <button type="button" className="pwtoggle" onClick={() => setShowPassword((v) => !v)} aria-label={showPassword ? "Hide password" : "Show password"}><Ic name={showPassword ? "eyeoff" : "eye"} /></button>
+          </div>
+        </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, margin: "12px 2px 0", color: "var(--muted)", fontSize: 13, fontWeight: 600 }}>
+          <input type="checkbox" style={{ width: 16, height: 16, accentColor: "var(--iris)" }} checked={rememberPassword} onChange={(e) => { const c = e.target.checked; setRememberPassword(c); if (!c) localStorage.removeItem(REMEMBER_LOGIN_KEY); }} />
+          <span>Keep me signed in</span>
+        </label>
+        <div style={{ marginTop: 18 }}><button className="btn" type="button" disabled={busy} onClick={() => void submit()}><Ic name="check" /> {busy ? "Signing in…" : "Sign in"}</button></div>
+        <div style={{ marginTop: 22, textAlign: "center", color: "var(--faint)", fontSize: 10.5 }}>Powered by <b style={{ color: "var(--muted)" }}>DUX Digitech</b></div>
       </div>
     </div>
   );
 }
 
-function Hero({ eyebrow, title, grad, text }: { eyebrow: string; title: string; grad: string; text: string }) {
-  return <div className="hero"><div className="eyebrow">{eyebrow}</div><h1>{title}<br /><span className="grad">{grad}</span></h1><p>{text}</p></div>;
-}
-
 function NotPermitted() {
-  return <div className="card accent card-pad"><Empty text="Not permitted." /></div>;
+  return <div className="empty"><h3>Not permitted</h3><p>You do not have access to this screen.</p></div>;
 }
 
 function PullToRefresh({ children, onRefresh, refreshing }: { children: ReactNode; onRefresh: () => Promise<void>; refreshing: boolean }) {
   const startY = useRef(0);
   const pulling = useRef(false);
   const [distance, setDistance] = useState(0);
-
   const begin = (event: React.TouchEvent) => {
     if (window.scrollY > 2 || refreshing) return;
-    startY.current = event.touches[0].clientY;
-    pulling.current = true;
+    startY.current = event.touches[0].clientY; pulling.current = true;
   };
   const move = (event: React.TouchEvent) => {
     if (!pulling.current) return;
@@ -685,253 +507,113 @@ function PullToRefresh({ children, onRefresh, refreshing }: { children: ReactNod
   };
   const end = async () => {
     if (!pulling.current) return;
-    const shouldRefresh = distance > 48;
-    pulling.current = false;
-    setDistance(0);
-    if (shouldRefresh) await onRefresh();
+    const should = distance > 48; pulling.current = false; setDistance(0);
+    if (should) await onRefresh();
   };
-
   return (
     <div className="ptr-wrap" onTouchStart={begin} onTouchMove={move} onTouchEnd={end} onTouchCancel={end}>
       <div className={`ptr-indicator ${refreshing || distance > 8 ? "show" : ""}`} style={{ transform: `translate(-50%, ${refreshing ? 10 : distance - 38}px)` }}>
-        <RefreshCw size={16} className={refreshing ? "spin" : ""} />
+        <Ic name="refresh" className={refreshing ? "ic spin" : "ic"} style={{ width: 16, height: 16 }} />
       </div>
       {children}
     </div>
   );
 }
 
-function MenuDrawer({ open, caps, active, openView, onClose, onLogout }: any) {
-  if (!open) return null;
+function MenuDrawer({ open, caps, active, session, openView, onClose, onLogout }: any) {
+  const name = session?.employee?.employee_name || session?.user || "Employee";
+  const emp = session?.employee?.employee || session?.employee?.name || "";
   const normal = [
-    { view: "dashboard", label: "Dashboard", icon: <Home size={18} /> },
-    caps.can_mark_attendance && { view: "attendance", label: "Attendance", icon: <Clock3 size={18} /> },
-    caps.can_mark_attendance && { view: "history", label: "Attendance History", icon: <CalendarDays size={18} /> },
-    caps.can_apply_leave && { view: "leave", label: "Leave Apply", icon: <CalendarDays size={18} /> },
-    { view: "notifications", label: "Notifications", icon: <Bell size={18} /> },
-    { view: "profile", label: "Profile", icon: <UserRound size={18} /> },
-    { view: "settings", label: "Settings", icon: <SettingsIcon size={18} /> }
-  ].filter(Boolean);
+    { view: "dashboard", label: "Dashboard", icon: "home" },
+    caps.can_mark_attendance && { view: "attendance", label: "Mark attendance", icon: "fp" },
+    caps.can_mark_attendance && { view: "history", label: "Attendance history", icon: "clock" },
+    caps.can_apply_leave && { view: "leave", label: "Leave", icon: "leaf" },
+    { view: "notifications", label: "Notifications", icon: "bell" }
+  ].filter(Boolean) as any[];
   const admin = [
-    caps.can_view_admin && { view: "admin", label: "Admin Panel", icon: <ShieldCheck size={18} /> },
-    caps.can_register_face && { view: "face", label: "Face Register", icon: <Camera size={18} /> },
-    caps.can_manage_locations && { view: "location", label: "Location / Geofence", icon: <MapPin size={18} /> },
-    caps.can_approve_leave && { view: "leaveApproval", label: "Leave Approval", icon: <CheckCircle2 size={18} /> },
-    caps.can_view_admin && { view: "employees", label: "Employee List", icon: <Users size={18} /> },
-    caps.can_manage_leave_policy && { view: "leavePolicy", label: "Leave Type / Leave Policy", icon: <CalendarDays size={18} /> },
-    caps.can_manage_shift_policy && { view: "shiftPolicy", label: "Shift & Attendance Policy", icon: <Clock3 size={18} /> },
-    caps.can_manage_regularization && { view: "regularization", label: "Regularization Pending", icon: <RefreshCw size={18} /> }
-  ].filter(Boolean);
+    caps.can_view_admin && { view: "admin", label: "Admin panel", icon: "shield" },
+    caps.can_approve_leave && { view: "leaveApproval", label: "Leave approval", icon: "check" },
+    caps.can_view_admin && { view: "employees", label: "Employees", icon: "users" },
+    caps.can_register_face && { view: "face", label: "Face register", icon: "camera" },
+    caps.can_manage_locations && { view: "location", label: "Locations / geofence", icon: "pin" },
+    caps.can_manage_leave_policy && { view: "leavePolicy", label: "Leave policy", icon: "leaf" },
+    caps.can_manage_shift_policy && { view: "shiftPolicy", label: "Shift policy", icon: "clock" },
+    caps.can_manage_regularization && { view: "regularization", label: "Regularization", icon: "refresh" }
+  ].filter(Boolean) as any[];
   return (
-    <div className="drawer-layer" onClick={onClose}>
-      <aside className="drawer" onClick={(event) => event.stopPropagation()}>
+    <>
+      <div className={`scrim ${open ? "show" : ""}`} onClick={onClose} />
+      <aside className={`drawer ${open ? "open" : ""}`}>
         <div className="drawer-head">
-          <img className="drawer-logo" src={assets.logo} alt="DUX Digitech" />
-          <button className="icon-btn" type="button" onClick={onClose} aria-label="Close menu"><X size={18} /></button>
+          <span className="avatar" style={{ width: 44, height: 44, borderRadius: 13, fontSize: 16 }}>{empInitials(name)}</span>
+          <div><strong style={{ fontSize: 14, letterSpacing: "-.02em" }}>{name}</strong><div style={{ fontSize: 11, color: "var(--faint)" }}>{emp}</div></div>
         </div>
-        <div className="drawer-list">
-          {normal.map((item: any) => <button className={active === item.view ? "active" : ""} key={`${item.view}-${item.label}`} onClick={() => openView(item.view)}>{item.icon}<span>{item.label}</span></button>)}
-        </div>
-        {admin.length ? <div className="drawer-section"><b>Admin</b><div className="drawer-list">{admin.map((item: any) => <button className={active === item.view ? "active" : ""} key={`${item.view}-${item.label}`} onClick={() => openView(item.view)}>{item.icon}<span>{item.label}</span></button>)}</div></div> : null}
-        <button className="btn btn-danger btn-wide drawer-logout" type="button" onClick={onLogout}><LogOut size={16} /> Logout</button>
+        {normal.map((item) => <button key={item.view} className={`dlink ${active === item.view ? "on" : ""}`} onClick={() => openView(item.view)}><Ic name={item.icon} /> {item.label}</button>)}
+        {admin.length > 0 && <><div className="dsec">Admin</div>{admin.map((item) => <button key={item.view} className={`dlink ${active === item.view ? "on" : ""}`} onClick={() => openView(item.view)}><Ic name={item.icon} /> {item.label}</button>)}</>}
+        <div className="dsec">Account</div>
+        <button className={`dlink ${active === "profile" ? "on" : ""}`} onClick={() => openView("profile")}><Ic name="user" /> Profile</button>
+        <button className={`dlink ${active === "settings" ? "on" : ""}`} onClick={() => openView("settings")}><Ic name="gear" /> Settings</button>
+        <button className="dlink" onClick={onLogout}><Ic name="logout" /> Log out</button>
       </aside>
-    </div>
+    </>
   );
 }
 
-function LiveCamera({
-  image,
-  onCapture,
-  flash,
-  title = "Keep your face inside the frame",
-  captureRef,
-  disabled = false,
-  disabledMessage = "Please select employee first.",
-  showControls = true,
-  autoStopAfterCapture = true,
-  hideWhenIdle = false,
-  onActiveChange
-}: any) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const [active, setActive] = useState(false);
-  const [starting, setStarting] = useState(false);
-  const [status, setStatus] = useState("Keep your face inside the frame");
-
-  const setCameraActive = (value: boolean) => {
-    setActive(value);
-    onActiveChange?.(value);
-  };
-
-  const stop = () => {
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
-    if (videoRef.current) videoRef.current.srcObject = null;
-    setStarting(false);
-    setStatus("Keep your face inside the frame");
-    setCameraActive(false);
-  };
-
-  useEffect(() => {
-    const stopFromApp = () => stop();
-    window.addEventListener("jew-hrms-stop-camera", stopFromApp);
-    return () => {
-      window.removeEventListener("jew-hrms-stop-camera", stopFromApp);
-      stop();
-    };
-  }, []);
-
-  const start = async () => {
-    if (disabled) {
-      flash("Employee required", disabledMessage);
-      return false;
-    }
-    if (!navigator.mediaDevices?.getUserMedia) {
-      flash("Camera failed", "Camera is not available on this device.");
-      return false;
-    }
-    setStarting(true);
-    setStatus("Starting camera...");
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: "user",
-          width: { ideal: 720 },
-          height: { ideal: 720 }
-        },
-        audio: false
-      });
-      streamRef.current = stream;
-      setCameraActive(true);
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-      const video = videoRef.current;
-      if (!video) throw new Error("camera_video_not_ready");
-      video.srcObject = stream;
-      video.muted = true;
-      video.playsInline = true;
-      await new Promise<void>((resolve) => {
-        if (video.readyState >= 2) return resolve();
-        video.onloadedmetadata = () => resolve();
-      });
-      await video.play();
-      setStatus("Face ready - keep your face inside the frame");
-      return true;
-    } catch (error: any) {
-      const name = error?.name || "";
-      const message = name === "NotAllowedError" || name === "PermissionDeniedError"
-        ? "Camera permission denied. Please allow camera access."
-        : "Camera is not available on this device.";
-      stop();
-      flash("Camera failed", message);
-      return false;
-    } finally {
-      setStarting(false);
-    }
-  };
-
-  const waitForVideo = async () => {
-    const video = videoRef.current;
-    if (!video) return false;
-    for (let i = 0; i < 20; i += 1) {
-      if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) return true;
-      await new Promise((resolve) => window.setTimeout(resolve, 100));
-    }
-    return false;
-  };
-
-  const capture = (stopAfter = autoStopAfterCapture) => {
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    if (!video || !canvas || !streamRef.current || video.videoWidth === 0 || video.videoHeight === 0) {
-      flash("Camera", disabled ? disabledMessage : "Start camera before capturing face.");
-      return "";
-    }
-    canvas.width = video.videoWidth || 720;
-    canvas.height = video.videoHeight || 960;
-    canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const nextImage = canvas.toDataURL("image/jpeg", 0.9);
-    onCapture(nextImage);
-    setStatus("Face captured. Save template or retake.");
-    if (stopAfter) stop();
-    return nextImage;
-  };
-
-  const startAndCapture = async () => {
-    if (!streamRef.current) {
-      const started = await start();
-      if (!started) return "";
-    }
-    setStatus("Verifying face...");
-    const ready = await waitForVideo();
-    if (!ready) {
-      flash("Camera", "Camera is still starting. Please try again.");
-      return "";
-    }
-    return capture(true);
-  };
-
-  useEffect(() => {
-    if (!captureRef) return;
-    captureRef.current = startAndCapture;
-    return () => {
-      captureRef.current = null;
-    };
-  }, [active, captureRef, disabled]);
-
-  if (hideWhenIdle && !active && !starting && !image) {
-    return <canvas ref={canvasRef} hidden />;
-  }
-
-  return (
-    <div>
-      <div className="camera-box live">
-        {active ? <><video ref={videoRef} autoPlay playsInline muted disablePictureInPicture /><div className="face-guide"><span /></div><div className="scan-status"><span className="status ok">{status}</span></div></> : image ? <img src={image} alt="Captured face" /> : <div><div className="camera-circle"><Camera size={36} /></div><b>{title}</b><span>{disabled ? disabledMessage : "Only one face allowed - Good lighting required"}</span></div>}
-        <canvas ref={canvasRef} hidden />
-      </div>
-      <div className="pills mt"><span className={`status ${active ? "ok" : image ? "pending" : "draft"}`}>{active ? status : image ? "Face captured" : disabled ? "Select employee first" : "Camera ready"}</span></div>
-      {showControls && <div className="btn-row mt">
-        <button className="btn" type="button" disabled={starting || disabled} onClick={active ? stop : start}>{active ? "Stop Camera" : starting ? "Starting..." : "Start Camera"}</button>
-        <button className="btn btn-cyan" type="button" disabled={!active || starting} onClick={() => capture()}>Capture Face</button>
-        {image && <button className="btn" type="button" onClick={() => { onCapture(""); if (!disabled) start(); }}>Retake</button>}
-      </div>}
-    </div>
-  );
+/* ---------- shared presentational helpers ---------- */
+function Stat({ icon, label, value, small, ink }: any) {
+  return <div className="stat"><div className="lab">{icon && <Ic name={icon} />} {label}</div><div className={`val ${ink ? "ink" : ""}`}>{value}{small && <small>{small}</small>}</div></div>;
+}
+function Mod({ icon, cyan, title, sub, onClick }: any) {
+  return <button className="mod" type="button" onClick={onClick}><span className={`mi ${cyan ? "cy" : ""}`}><Ic name={icon} /></span><span className="mt"><strong>{title}</strong><span>{sub}</span></span><span className="chev"><Ic name="chevron" /></span></button>;
+}
+function Chip({ kind = "info", icon, children }: any) {
+  return <span className={`chip ${kind}`}>{icon && <Ic name={icon} />}{children}</span>;
+}
+function statusChipKind(status?: string) {
+  const s = String(status || "").toLowerCase();
+  if (s.includes("approv")) return "ok";
+  if (s.includes("reject") || s.includes("cancel")) return "err";
+  return "pend";
 }
 
-function Dashboard({ data, open, caps, flash }: any) {
-  const emp = data?.employee || {};
-  const todayData = data?.today || {};
-  const guardedOpen = (allowed: boolean, next: View, message: string) => {
-    if (!allowed) {
-      flash("Not configured", message);
-      return;
-    }
-    open(next);
-  };
+function Dashboard({ data, open, caps, flash, session }: any) {
+  const emp = data?.employee || session?.employee || {};
+  const t = data?.today || {};
+  const status = data?.attendance_status || {};
+  const name = emp.employee_name || "Employee";
+  const guarded = (allowed: boolean, next: View, message: string) => { if (!allowed) { flash("Not configured", message); return; } open(next); };
+  const checkedIn = status.status === "in" || t.status === "In";
+  const inLabel = status.in_time_label || formatTime(status.in_time);
+  const leaveBal = (data?.leave_balance || []).reduce((a: number, b: any) => a + Number(b.unused_leaves || 0), 0);
   return <>
-    <Hero eyebrow="TODAY OVERVIEW" title="Good morning," grad={emp.employee_name || "Employee"} text="Face and location checks protect every attendance punch." />
-    <div className="metrics">
-      <Metric label="Status" value={todayData.status || "Not Marked"} sub={todayData.date || today()} />
-      <Metric label="Shift" value={data?.shift || "General"} sub="Assigned shift" />
-      <Metric label="Face" value={data?.face_status?.registered ? "Ready" : "Pending"} sub="Server verified" />
-      <Metric label="Locations" value={data?.location_status?.assigned || 0} sub="Assigned geofences" />
+    <p className="eyebrow">Today overview</p>
+    <h1 className="h1">Good morning,<br /><span className="g">{name}</span></h1>
+    <p className="sub"><span className="num">{t.date || today()}</span> · {data?.shift || "General shift"}</p>
+
+    <div className="card accent" style={{ marginTop: 15, display: "flex", alignItems: "center", gap: 12 }}>
+      <div style={{ flex: 1 }}>
+        {checkedIn ? <Chip kind="ok" icon="check">Checked in</Chip> : <Chip kind="pend" icon="clock">Not marked</Chip>}
+        <div style={{ marginTop: 9, fontSize: 11.5, color: "var(--muted)" }}>{checkedIn && inLabel ? <>Since <span className="num cy">{inLabel}</span></> : "No check-in yet today"}</div>
+      </div>
+      <div style={{ textAlign: "right" }}>
+        <div className="mono" style={{ fontSize: 22, fontWeight: 600, color: "var(--cyan)", letterSpacing: "-.02em" }}>{status.working_hours || (status.in_time && status.out_time ? formatWorkingHours(status.in_time, status.out_time) : "—")}</div>
+        <div style={{ fontSize: 10, color: "var(--faint)", textTransform: "uppercase", letterSpacing: ".08em" }}>worked today</div>
+      </div>
     </div>
-    <div className="card accent card-pad btn-row"><button className="btn btn-primary" onClick={() => guardedOpen(caps.can_mark_attendance, "attendance", "Employee mapping is not configured. Please contact HR.")}>Mark Attendance</button><button className="btn" onClick={() => guardedOpen(caps.can_apply_leave, "leave", "Leave access is not configured. Please contact HR.")}>Apply Leave</button></div>
-    <div className="list mt">
-      <Action icon={<CalendarDays size={19} />} title="Attendance History" sub="Check monthly records" onClick={() => open("history")} />
-      <Action icon={<CalendarDays size={19} />} title="Leave Management" sub="Apply and track leave" onClick={() => open("leave")} />
-      <Action icon={<Bell size={19} />} title="Notifications" sub="Alerts and reminders" onClick={() => open("notifications")} />
+
+    <div className="grid2" style={{ marginTop: 12 }}>
+      <Stat icon="calendar" label="Status" value={<span style={{ fontSize: 17 }}>{t.status || "Not Marked"}</span>} />
+      <Stat icon="leaf" label="Leave bal." value={leaveBal || 0} small=" days" />
+    </div>
+
+    <div className="sec-lab">Quick actions</div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {caps.can_mark_attendance && <Mod icon="fp" title="Mark attendance" sub="Face + geofence verified" onClick={() => guarded(caps.can_mark_attendance, "attendance", "Employee mapping is not configured. Please contact HR.")} />}
+      <Mod icon="clock" cyan title="Attendance history" sub="Timeline & monthly summary" onClick={() => open("history")} />
+      {caps.can_apply_leave && <Mod icon="leaf" title="Apply for leave" sub="Submit & track requests" onClick={() => guarded(caps.can_apply_leave, "leave", "Leave access is not configured. Please contact HR.")} />}
+      <Mod icon="bell" cyan title="Notifications" sub="Alerts & reminders" onClick={() => open("notifications")} />
     </div>
   </>;
-}
-
-function Metric({ label, value, sub }: any) {
-  return <div className="card metric"><div className="metric-label">{label}</div><div className="metric-value">{value}</div><div className="metric-sub">{sub}</div></div>;
-}
-
-function Action({ icon, title, sub, onClick }: any) {
-  return <button className="list-item" onClick={onClick}><div className="tile-icon">{icon}</div><div><strong>{title}</strong><span>{sub}</span></div><ChevronRight size={18} /></button>;
 }
 
 function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: any) {
@@ -949,16 +631,10 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: an
   const streamRef = useRef<MediaStream | null>(null);
   const autoSubmitRef = useRef(false);
 
+  useEffect(() => { setStatus(initialStatus || null); }, [initialStatus]);
   useEffect(() => {
-    setStatus(initialStatus || null);
-  }, [initialStatus]);
-
-  useEffect(() => {
-    if (!status) {
-      call(API.getTodayAttendanceStatus).then(setStatus).catch((error) => flash("Unable to load", cleanErrorMessage(error)));
-    }
+    if (!status) call(API.getTodayAttendanceStatus).then(setStatus).catch((error) => flash("Unable to load", cleanErrorMessage(error)));
   }, []);
-
   useEffect(() => {
     const tick = () => setNowText(new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", second: "2-digit" }));
     tick();
@@ -967,32 +643,15 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: an
   }, []);
 
   const requestPosition = (highAccuracy: boolean, timeout: number) => new Promise<GeolocationCoordinates>((resolve, reject) => {
-    navigator.geolocation.getCurrentPosition(
-      (pos) => resolve(pos.coords),
-      (err) => reject(err),
-      { enableHighAccuracy: highAccuracy, timeout, maximumAge: 30000 }
-    );
+    navigator.geolocation.getCurrentPosition((pos) => resolve(pos.coords), (err) => reject(err), { enableHighAccuracy: highAccuracy, timeout, maximumAge: 30000 });
   });
-
   const getCurrentLocation = async (): Promise<GeolocationCoordinates> => {
-    if (!navigator.geolocation) {
-      throw new Error("Location is not available on this device.");
-    }
-    try {
-      return await requestPosition(true, 15000);
-    } catch (err: any) {
-      // GeolocationPositionError.PERMISSION_DENIED === 1: the OS/browser blocked
-      // location for this app. This is a device-location issue, NOT an account
-      // permission problem, so keep the wording specific to location.
-      if (err && err.code === 1) {
-        throw new Error("Location is turned off for this app. Please enable location/GPS and allow access, then try again.");
-      }
-      // POSITION_UNAVAILABLE (2) / TIMEOUT (3): retry once with coarse accuracy.
-      try {
-        return await requestPosition(false, 20000);
-      } catch {
-        throw new Error("Could not get your location. Please turn on GPS/location and try again in an open area.");
-      }
+    if (!navigator.geolocation) throw new Error("Location is not available on this device.");
+    try { return await requestPosition(true, 15000); }
+    catch (err: any) {
+      if (err && err.code === 1) throw new Error("Location is turned off for this app. Please enable location/GPS and allow access, then try again.");
+      try { return await requestPosition(false, 20000); }
+      catch { throw new Error("Could not get your location. Please turn on GPS/location and try again in an open area."); }
     }
   };
 
@@ -1003,140 +662,69 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: an
     setCameraReady(false);
     onCameraActiveChange?.(false);
   };
-
   const closeVerify = () => {
-    stopVerifyCamera();
-    autoSubmitRef.current = false;
-    setVerifyType(null);
-    setSubmitting(false);
-    setCoords(null);
-    setGpsStatus("Captured on submit");
-    setCameraStatus("Starting camera...");
-    setFaceStatus("Looking for face...");
+    stopVerifyCamera(); autoSubmitRef.current = false; setVerifyType(null); setSubmitting(false);
+    setCoords(null); setGpsStatus("Captured on submit"); setCameraStatus("Starting camera..."); setFaceStatus("Looking for face...");
   };
-
   useEffect(() => {
     const close = () => closeVerify();
     window.addEventListener("jew-hrms-close-attendance-verify", close);
-    return () => {
-      window.removeEventListener("jew-hrms-close-attendance-verify", close);
-      stopVerifyCamera();
-    };
+    return () => { window.removeEventListener("jew-hrms-close-attendance-verify", close); stopVerifyCamera(); };
   }, []);
 
   const startVerifyCamera = async () => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error("Camera is not available on this device.");
-    }
-    setCameraStatus("Starting camera...");
-    setFaceStatus("Looking for face...");
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: "user",
-        width: { ideal: 720 },
-        height: { ideal: 720 }
-      },
-      audio: false
-    });
-    streamRef.current = stream;
-    onCameraActiveChange?.(true);
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error("Camera is not available on this device.");
+    setCameraStatus("Starting camera..."); setFaceStatus("Looking for face...");
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 720 }, height: { ideal: 720 } }, audio: false });
+    streamRef.current = stream; onCameraActiveChange?.(true);
+    const video = videoRef.current; const canvas = canvasRef.current;
     if (!video || !canvas) throw new Error("Camera is not ready.");
-    video.srcObject = stream;
-    video.muted = true;
-    video.playsInline = true;
-    await new Promise<void>((resolve) => {
-      if (video.readyState >= 2) return resolve();
-      video.onloadedmetadata = () => resolve();
-    });
+    video.srcObject = stream; video.muted = true; video.playsInline = true;
+    await new Promise<void>((resolve) => { if (video.readyState >= 2) return resolve(); video.onloadedmetadata = () => resolve(); });
     await video.play();
-    for (let i = 0; i < 20; i += 1) {
-      if (video.videoWidth > 0 && video.videoHeight > 0) break;
-      await new Promise((resolve) => window.setTimeout(resolve, 100));
-    }
+    for (let i = 0; i < 20; i += 1) { if (video.videoWidth > 0 && video.videoHeight > 0) break; await new Promise((resolve) => window.setTimeout(resolve, 100)); }
     if (!video.videoWidth || !video.videoHeight) throw new Error("Camera is still starting. Please try again.");
-    setCameraReady(true);
-    setCameraStatus("Camera ready");
-    setFaceStatus("Ready to capture");
+    setCameraReady(true); setCameraStatus("Camera ready"); setFaceStatus("Ready to capture");
   };
 
   useEffect(() => {
     if (!verifyType) return;
     let cancelled = false;
     autoSubmitRef.current = false;
-    stopVerifyCamera();
-    setCoords(null);
-    setGpsStatus("Captured on submit");
+    stopVerifyCamera(); setCoords(null); setGpsStatus("Captured on submit");
     startVerifyCamera().catch((error) => {
-      if (!cancelled) {
-        setCameraStatus("Camera unavailable");
-        setFaceStatus("Camera permission required");
-        flash("Camera failed", cleanErrorMessage(error));
-      }
+      if (!cancelled) { setCameraStatus("Camera unavailable"); setFaceStatus("Camera permission required"); flash("Camera failed", cleanErrorMessage(error)); }
     });
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [verifyType]);
 
-  // Single-tap flow: once the camera is ready, automatically capture the face,
-  // grab GPS and submit — no second "Confirm" press. The ref + submitting guard
-  // keep this to exactly one auto-submission per Mark In/Out.
   useEffect(() => {
-    if (verifyType && cameraReady && !submitting && !autoSubmitRef.current) {
-      autoSubmitRef.current = true;
-      void confirmVerify();
-    }
+    if (verifyType && cameraReady && !submitting && !autoSubmitRef.current) { autoSubmitRef.current = true; void confirmVerify(); }
   }, [verifyType, cameraReady]);
 
   const captureCurrentFrame = () => {
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    if (!video || !canvas || !streamRef.current || !video.videoWidth || !video.videoHeight) {
-      throw new Error("Camera is still starting. Please try again.");
-    }
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    const video = videoRef.current; const canvas = canvasRef.current;
+    if (!video || !canvas || !streamRef.current || !video.videoWidth || !video.videoHeight) throw new Error("Camera is still starting. Please try again.");
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
     canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
     return canvas.toDataURL("image/jpeg", 0.9);
   };
-
   const openVerify = (type: "IN" | "OUT") => {
-    if (type === "IN" && !status?.can_mark_in) {
-      flash("Attendance", !faceReady ? "Face not registered. Please contact admin." : !locationReady ? "Location not assigned. Please contact admin." : "Mark In is not available now.");
-      return;
-    }
-    if (type === "OUT" && !status?.can_mark_out) {
-      flash("Attendance", !faceReady ? "Face not registered. Please contact admin." : !locationReady ? "Location not assigned. Please contact admin." : "Mark Out is not available now.");
-      return;
-    }
+    if (type === "IN" && !status?.can_mark_in) { flash("Attendance", !faceReady ? "Face not registered. Please contact admin." : !locationReady ? "Location not assigned. Please contact admin." : "Mark In is not available now."); return; }
+    if (type === "OUT" && !status?.can_mark_out) { flash("Attendance", !faceReady ? "Face not registered. Please contact admin." : !locationReady ? "Location not assigned. Please contact admin." : "Mark Out is not available now."); return; }
     setVerifyType(type);
   };
-
   const confirmVerify = async () => {
     if (!verifyType || submitting) return;
     setSubmitting(true);
     try {
       setFaceStatus("Face captured");
       const capturedImage = captureCurrentFrame();
-      if (!capturedImage) {
-        flash("Face required", "Please keep your full face inside the frame.");
-        return;
-      }
+      if (!capturedImage) { flash("Face required", "Please keep your full face inside the frame."); return; }
       setGpsStatus("Capturing GPS...");
       const currentCoords = await getCurrentLocation();
-      setCoords(currentCoords);
-      setGpsStatus("Captured");
-      setFaceStatus("Verifying face");
-      const result = await call(API.markAttendance, {
-        type: verifyType,
-        face_image: capturedImage,
-        latitude: currentCoords.latitude,
-        longitude: currentCoords.longitude,
-        accuracy: currentCoords.accuracy,
-        timestamp: new Date().toISOString()
-      });
+      setCoords(currentCoords); setGpsStatus("Captured"); setFaceStatus("Verifying face");
+      const result = await call(API.markAttendance, { type: verifyType, face_image: capturedImage, latitude: currentCoords.latitude, longitude: currentCoords.longitude, accuracy: currentCoords.accuracy, timestamp: new Date().toISOString() });
       await onMarked?.();
       if (result?.attendance_status) setStatus(result.attendance_status);
       flash("Attendance", result.message || toastText(result.code));
@@ -1144,83 +732,84 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: an
     } catch (error) {
       setFaceStatus(cleanErrorMessage(error));
       flash("Attendance failed", cleanErrorMessage(error));
-    } finally {
-      setSubmitting(false);
-    }
+    } finally { setSubmitting(false); }
   };
 
   const faceReady = status?.face_registered ?? status?.face_status?.registered ?? true;
   const locationReady = status?.location_assigned ?? ((status?.location_details?.assigned || status?.location_status?.assigned || 0) > 0);
   const nextType: "IN" | "OUT" = status?.status === "in" ? "OUT" : "IN";
   const canUseAction = nextType === "IN" ? Boolean(status?.can_mark_in) : Boolean(status?.can_mark_out);
-  const actionLabel = nextType === "IN" ? "Mark In" : "Mark Out";
-  const statusMessage = !faceReady
-    ? "Face not registered. Please contact admin."
-    : !locationReady
-      ? "Location not assigned. Please contact admin."
-      : "Ready for secure face and location attendance.";
-  const employeeName = status?.employee_name || status?.employee || "Employee";
-  const employeeId = status?.employee || status?.employee_id || "";
-  const initials = employeeName.split(" ").filter(Boolean).slice(0, 2).map((part: string) => part[0]).join("").toUpperCase() || "JE";
+  const inLabel = status?.in_time_label || formatTime(status?.in_time);
+  const outLabel = status?.out_time_label || formatTime(status?.out_time);
+  const completed = status?.status === "completed";
+
   if (verifyType) {
-    const actionName = verifyType === "IN" ? "Mark In" : "Mark Out";
-    const confirmLabel = submitting ? "Verifying..." : !cameraReady ? "Starting camera..." : `Retry ${actionName}`;
     return (
-      <>
-        <div className="verify-stack">
-          <div className="verify-title">
-            <div className="eyebrow">ATTENDANCE VERIFY</div>
-            <h1>Verify face and <span className="grad">mark attendance</span></h1>
-          </div>
-          <div className="verify-employee-card">
-            <div className="avatar verify-avatar">{initials}</div>
-            <div><strong>{employeeName}</strong><span>{employeeId}</span><b>IST {nowText}</b></div>
-            <span className="verify-badge">{verifyType}</span>
-          </div>
-          <div className="verify-mini-card"><Clock3 size={18} /><div><b>Time</b><span>IST {nowText}</span></div></div>
-          <div className="verify-mini-card"><MapPin size={18} /><div><b>GPS</b><span>{coords ? `${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)} (${Math.round(coords.accuracy || 0)} m)` : gpsStatus}</span></div></div>
-          <div className="verify-camera">
-            <video ref={videoRef} autoPlay muted playsInline />
-            <canvas ref={canvasRef} hidden />
-            <div className="dux-face-frame"><span /></div>
-            <div className="face-quality-card"><ShieldCheck size={18} /><span>{faceStatus}</span></div>
-          </div>
-          <div className="verify-ready-card"><ShieldCheck size={20} /><div><b>Ready for ERPNext verification</b><span>Face and location verify and submit automatically.</span></div></div>
-          <button className="btn btn-primary btn-wide verify-confirm" type="button" disabled={!cameraReady || submitting} onClick={() => { autoSubmitRef.current = true; void confirmVerify(); }}>
-            {confirmLabel}
-          </button>
-          <div className="faint verify-camera-status">{cameraStatus}</div>
+      <div style={{ textAlign: "center" }}>
+        <p className="eyebrow">Attendance verify</p>
+        <h1 className="h1">Verify &amp; <span className="g">mark {verifyType === "IN" ? "in" : "out"}</span></h1>
+        <div className="facebox" style={{ marginTop: 18, height: 300 }}>
+          <span className="brk b1" /><span className="brk b2" /><span className="brk b3" /><span className="brk b4" />
+          <video ref={videoRef} autoPlay muted playsInline />
+          <canvas ref={canvasRef} hidden />
+          <div className="scan"><span className="chip ok"><Ic name="camera" /> {faceStatus}</span></div>
         </div>
-      </>
-    );
-  }
-  if (status?.status === "completed") {
-    return <>
-      <Hero eyebrow="MARK IN / OUT" title="Verify face and" grad="mark attendance" text="Attendance submits only after server face match and geofence validation." />
-      <div className="card accent card-pad complete-card">
-        <CheckCircle2 size={24} />
-        <div>
-          <h2>Attendance completed</h2>
-          <div className="complete-grid">
-            <span>In Time</span><b>{status.in_time_label || formatTime(status.in_time)}</b>
-            <span>Out Time</span><b>{status.out_time_label || formatTime(status.out_time)}</b>
-            <span>Working Hours</span><b>{status.working_hours || formatWorkingHours(status.in_time, status.out_time)}</b>
-          </div>
+        <p className="sub" style={{ marginTop: 12 }}>Center your face in the frame — verification &amp; submit are automatic.</p>
+        <div style={{ marginTop: 12, display: "flex", gap: 9, justifyContent: "center", flexWrap: "wrap" }}>
+          <Chip kind="info" icon="pin">{coords ? `${coords.latitude.toFixed(4)}, ${coords.longitude.toFixed(4)}` : gpsStatus}</Chip>
+          <Chip kind="data" icon="clock">IST {nowText}</Chip>
+        </div>
+        <div style={{ marginTop: 16 }}>
+          <button className="btn ok" type="button" disabled={!cameraReady || submitting} onClick={() => { autoSubmitRef.current = true; void confirmVerify(); }}>
+            <Ic name="check" /> {submitting ? "Verifying…" : !cameraReady ? "Starting camera…" : `Retry mark ${verifyType === "IN" ? "in" : "out"}`}
+          </button>
         </div>
       </div>
-    </>;
+    );
   }
-  return <>
-    <Hero eyebrow="MARK IN / OUT" title="Verify face and" grad="mark attendance" text="Attendance submits only after server face match and geofence validation." />
-    <div className="card accent card-pad">
-      <div className={`notice ${status?.status === "completed" ? "ok-notice" : ""}`}><CheckCircle2 size={18} /><div><b>{status?.status_label || "Loading today status"}</b><span>{statusMessage}</span></div></div>
-      <div className="btn-row mt"><button className={`btn btn-wide ${nextType === "IN" ? "btn-primary" : "btn-cyan"}`} type="button" disabled={!canUseAction} onClick={() => openVerify(nextType)}>{actionLabel}</button></div>
+
+  return (
+    <div style={{ textAlign: "center" }}>
+      <div className="ring" style={{ background: completed ? "conic-gradient(var(--ok) 0deg 360deg)" : status?.status === "in" ? "conic-gradient(var(--iris) 0deg 246deg,var(--surface-3) 246deg 360deg)" : "conic-gradient(var(--surface-3) 0deg 360deg)" }}>
+        <div className="in">
+          <div className="k">{completed ? "Out at" : status?.status === "in" ? "In at" : "Today"}</div>
+          <div className="v">{completed ? (outLabel || "--:--") : status?.status === "in" ? (inLabel || "--:--") : "--:--"}</div>
+          <div className="s">{completed ? (status?.working_hours || formatWorkingHours(status?.in_time, status?.out_time)) : status?.status_label || "Not marked yet"}</div>
+        </div>
+      </div>
+      <div className="facebox" style={{ marginTop: 18 }}>
+        <span className="brk b1" /><span className="brk b2" /><span className="brk b3" /><span className="brk b4" />
+        <Ic name="camera" />
+      </div>
+      <p className="sub" style={{ marginTop: 12 }}>{!faceReady ? "Face not registered. Please contact admin." : !locationReady ? "Location not assigned. Please contact admin." : "Center your face in the frame — verification is automatic."}</p>
+      {!completed && <div style={{ marginTop: 16 }}>
+        <button className={`btn ${nextType === "IN" ? "ok" : ""}`} type="button" disabled={!canUseAction} onClick={() => openVerify(nextType)}><Ic name="check" /> Verify &amp; mark {nextType === "IN" ? "in" : "out"}</button>
+      </div>}
+      {completed && <div style={{ marginTop: 14 }}><Chip kind="ok" icon="check">Attendance completed</Chip></div>}
+      <div style={{ marginTop: 12, display: "flex", gap: 9, justifyContent: "center", flexWrap: "wrap" }}>
+        <Chip kind={locationReady ? "ok" : "pend"} icon="pin">{locationReady ? "Geofence OK" : "No location"}</Chip>
+        <Chip kind={faceReady ? "info" : "pend"} icon="camera">{faceReady ? "Face ready" : "Face pending"}</Chip>
+      </div>
     </div>
-  </>;
+  );
 }
 
 function History({ data }: any) {
-  return <><Hero eyebrow="ATTENDANCE HISTORY" title="Monthly" grad="records" text="Checkins and HRMS attendance records from the server." /><div className="card"><div className="card-head"><h2>Recent Checkins</h2></div><div className="card-pad list">{(data?.checkins || []).length ? data.checkins.map((row: any) => <div className="list-item" key={row.name}><div><strong>{row.log_type}</strong><span>{String(row.time)}</span></div><span className="status ok">Synced</span></div>) : <Empty text="No attendance records found." />}</div></div></>;
+  const checkins = data?.checkins || [];
+  const attendance = data?.attendance || [];
+  const present = attendance.filter((a: any) => String(a.status).toLowerCase().includes("present")).length;
+  return <>
+    <div className="grid2">
+      <Stat icon="check" label="Present" value={present || attendance.length || 0} small={attendance.length ? `/${attendance.length}` : ""} />
+      <Stat icon="clock" label="Records" value={checkins.length} />
+    </div>
+    <div className="sec-lab">Recent checkins</div>
+    <div className="card list" style={{ padding: "4px 15px" }}>
+      {checkins.length ? checkins.map((row: any) => (
+        <div className="row" key={row.name}><div className="date">{String(row.time).slice(5, 10)}</div><div className="mid"><strong>{row.log_type}</strong><span>{String(row.time).slice(11, 16)}</span></div><Chip kind="ok">Synced</Chip></div>
+      )) : <div className="empty"><h3>No records</h3><p>No attendance records found.</p></div>}
+    </div>
+  </>;
 }
 
 function Leave({ data, caps, flash, reload }: any) {
@@ -1228,18 +817,9 @@ function Leave({ data, caps, flash, reload }: any) {
   const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
   const canSelectEmployee = Boolean(caps?.can_view_admin);
   const submit = async () => {
-    if (!form.leave_type || !form.from_date || !form.to_date) {
-      flash("Required fields", "Leave Type, From Date and To Date are required.");
-      return;
-    }
-    if (form.from_date > form.to_date) {
-      flash("Invalid dates", "From Date cannot be after To Date.");
-      return;
-    }
-    if (form.half_day && !form.half_day_date) {
-      flash("Required fields", "Half Day Date is required.");
-      return;
-    }
+    if (!form.leave_type || !form.from_date || !form.to_date) { flash("Required fields", "Leave Type, From Date and To Date are required."); return; }
+    if (form.from_date > form.to_date) { flash("Invalid dates", "From Date cannot be after To Date."); return; }
+    if (form.half_day && !form.half_day_date) { flash("Required fields", "Half Day Date is required."); return; }
     const result = await runAction("submit-leave", async () => {
       const payload = canSelectEmployee ? form : { ...form, employee: undefined };
       const response = await call(API.applyLeave, payload);
@@ -1249,40 +829,144 @@ function Leave({ data, caps, flash, reload }: any) {
     if (result) setForm({ employee: "", leave_type: "", from_date: "", to_date: "", reason: "", half_day: false, half_day_date: "", half_day_type: "First Half" });
   };
   const cancelLeave = async (name: string) => {
-    await runAction(`cancel-${name}`, async () => {
-      await call(API.cancelLeave, { name });
-      reload();
-    }, { successTitle: "Leave cancelled", successMessage: "Leave request updated.", errorTitle: "Cancel failed" });
+    await runAction(`cancel-${name}`, async () => { await call(API.cancelLeave, { name }); reload(); }, { successTitle: "Leave cancelled", successMessage: "Leave request updated.", errorTitle: "Cancel failed" });
   };
-  return <><Hero eyebrow="LEAVE MANAGEMENT" title="Apply and track" grad="leave requests" text="Submit leave applications and view approval status from HRMS." /><div className="card accent card-pad"><div className="grid-2">{canSelectEmployee && <Select label="Employee" value={form.employee} onChange={(v: string) => setForm({ ...form, employee: v })} options={(data.employees || []).map((e: any) => ({ value: e.name, label: e.employee_name || e.name }))} />}<Select label="Leave Type" value={form.leave_type} onChange={(v: string) => setForm({ ...form, leave_type: v })} options={(data.types || []).map((t: any) => ({ value: t.name, label: t.leave_type_name || t.name }))} /><Field label="From Date" type="date" value={form.from_date} onChange={(v: string) => setForm({ ...form, from_date: v })} /><Field label="To Date" type="date" value={form.to_date} onChange={(v: string) => setForm({ ...form, to_date: v })} /><label className="check"><input type="checkbox" checked={form.half_day} onChange={(e) => setForm({ ...form, half_day: e.target.checked })} /> Half day</label>{form.half_day && <Field label="Half Day Date" type="date" value={form.half_day_date} onChange={(v: string) => setForm({ ...form, half_day_date: v })} />}{form.half_day && <Select label="Half Day Type" value={form.half_day_type} onChange={(v: string) => setForm({ ...form, half_day_type: v })} options={["First Half", "Second Half"]} />}</div><div className="field"><label>Reason</label><textarea className="textarea" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></div><button className="btn btn-primary btn-wide" type="button" disabled={isAnyBusy} onClick={submit}>{isBusy("submit-leave") ? "Submitting..." : "Submit Leave"}</button></div><div className="card mt"><div className="card-head"><h2>My Leaves</h2></div><div className="card-pad list">{(data.leaves || []).length ? data.leaves.map((l: any) => { const status = l.approval_status || l.jew_hrms_approval_status || l.status; return <div className="list-item stack" key={l.name}><div><strong>{l.leave_type}</strong><span>{l.from_date} to {l.to_date}{l.half_day ? " | Half Day" : ""}</span></div><div className="btn-row"><span className={`status ${status === "Approved" ? "ok" : status === "Rejected" || status === "Cancelled" ? "err" : "pending"}`}>{status}</span>{!["Approved", "Rejected", "Cancelled"].includes(status) && <button className="btn btn-danger" type="button" disabled={isAnyBusy} onClick={() => cancelLeave(l.name)}>{isBusy(`cancel-${l.name}`) ? "Cancelling..." : "Cancel"}</button>}</div></div>; }) : <Empty text="No leave requests yet." />}</div></div></>;
+  const balances = data.balances || [];
+  return <>
+    {balances.length > 0 && <div className="grid2">{balances.slice(0, 2).map((b: any, i: number) => <Stat key={i} label={b.leave_type} value={Number(b.unused_leaves ?? b.total_leaves_allocated ?? 0)} small={b.total_leaves_allocated ? `/${b.total_leaves_allocated}` : ""} />)}</div>}
+    <div className="card" style={{ marginTop: balances.length ? 12 : 0 }}>
+      {canSelectEmployee && <Select label="Employee" value={form.employee} onChange={(v: string) => setForm({ ...form, employee: v })} options={(data.employees || []).map((e: any) => ({ value: e.name, label: e.employee_name || e.name, description: e.description || e.name }))} />}
+      <Select label="Leave type" value={form.leave_type} onChange={(v: string) => setForm({ ...form, leave_type: v })} options={(data.types || []).map((t: any) => ({ value: t.name, label: t.leave_type_name || t.name }))} />
+      <div className="grid2" style={{ marginTop: 13 }}>
+        <Field label="From" icon="calendar" type="date" value={form.from_date} onChange={(v: string) => setForm({ ...form, from_date: v })} />
+        <Field label="To" icon="calendar" type="date" value={form.to_date} onChange={(v: string) => setForm({ ...form, to_date: v })} />
+      </div>
+      <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 13, color: "var(--muted)", fontSize: 12.5, fontWeight: 600 }}>
+        <input type="checkbox" style={{ accentColor: "var(--iris)" }} checked={form.half_day} onChange={(e) => setForm({ ...form, half_day: e.target.checked })} /> Half day
+      </label>
+      {form.half_day && <Field label="Half day date" icon="calendar" type="date" value={form.half_day_date} onChange={(v: string) => setForm({ ...form, half_day_date: v })} />}
+      {form.half_day && <Select label="Half day type" value={form.half_day_type} onChange={(v: string) => setForm({ ...form, half_day_type: v })} options={["First Half", "Second Half"]} />}
+      <Field label="Reason" value={form.reason} onChange={(v: string) => setForm({ ...form, reason: v })} placeholder="Add a short note (optional)" />
+      <div style={{ marginTop: 16 }}><button className="btn" type="button" disabled={isAnyBusy} onClick={submit}><Ic name="check" /> {isBusy("submit-leave") ? "Submitting…" : "Submit leave request"}</button></div>
+    </div>
+    <div className="sec-lab">My requests</div>
+    {(data.leaves || []).length ? data.leaves.map((l: any) => {
+      const st = l.approval_status || l.jew_hrms_approval_status || l.status;
+      const kind = statusChipKind(st);
+      return <div className="qrow" key={l.name}>
+        <div className="qa"><Ic name={kind === "ok" ? "check" : kind === "err" ? "close" : "clock"} /></div>
+        <div className="qt"><strong>{l.leave_type}{l.half_day ? " · Half day" : ""}</strong><span>{l.from_date} → {l.to_date}</span></div>
+        {["Approved", "Rejected", "Cancelled"].includes(st) ? <Chip kind={kind}>{st}</Chip>
+          : <button className="btn danger sm" style={{ width: "auto", padding: "0 12px" }} type="button" disabled={isAnyBusy} onClick={() => cancelLeave(l.name)}>{isBusy(`cancel-${l.name}`) ? "…" : "Cancel"}</button>}
+      </div>;
+    }) : <div className="empty"><h3>No requests</h3><p>No leave requests yet.</p></div>}
+  </>;
 }
 
-function Admin({ open, caps }: any) {
-  return <><Hero eyebrow="ADMIN ACCESS" title="Manage face," grad="locations and leave" text="Role-based admin tools for HR and authorized approvers only." /><div className="card accent"><div className="card-head"><h2>Admin Modules</h2><span className="status ok">Allowed</span></div><div className="card-pad list">{caps.can_register_face && <Action icon={<Camera size={19} />} title="Face Register / Update" sub="Select employee and capture face" onClick={() => open("face")} />}{caps.can_manage_locations && <Action icon={<MapPin size={19} />} title="Location & Geofence" sub="Create locations and assign radius" onClick={() => open("location")} />}{caps.can_approve_leave && <Action icon={<CheckCircle2 size={19} />} title="Leave Approval" sub="Approve or reject requests" onClick={() => open("leaveApproval")} />}{caps.can_manage_leave_policy && <Action icon={<CalendarDays size={19} />} title="Leave Type / Leave Policy" sub="Configure CL, PL, SL and LWP" onClick={() => open("leavePolicy")} />}{caps.can_manage_shift_policy && <Action icon={<Clock3 size={19} />} title="Shift & Attendance Policy" sub="Late, early and short-hours rules" onClick={() => open("shiftPolicy")} />}{caps.can_manage_regularization && <Action icon={<RefreshCw size={19} />} title="Regularization Pending" sub="Resolve missing out and policy exceptions" onClick={() => open("regularization")} />}{caps.can_view_admin && <Action icon={<Users size={19} />} title="Employee List" sub="Face/location status overview" onClick={() => open("employees")} />}</div></div></>;
+function Admin({ open, caps, data }: any) {
+  const emp = data?.employee || {};
+  return <>
+    <div className="grid2">
+      <Stat icon="users" label="Employees" value={<span style={{ fontSize: 20 }}>—</span>} ink />
+      <Stat icon="clock" label="My status" value={<span style={{ fontSize: 17 }}>{data?.today?.status || "—"}</span>} />
+    </div>
+    <div className="sec-lab">Admin modules</div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {caps.can_approve_leave && <Mod icon="check" title="Leave approval" sub="Approve or reject requests" onClick={() => open("leaveApproval")} />}
+      {caps.can_view_admin && <Mod icon="users" cyan title="Employees" sub="Face / location status" onClick={() => open("employees")} />}
+      {caps.can_register_face && <Mod icon="camera" title="Face register" sub="Enroll employee templates" onClick={() => open("face")} />}
+      {caps.can_manage_locations && <Mod icon="pin" cyan title="Locations / geofence" sub="Assign work sites" onClick={() => open("location")} />}
+      {caps.can_manage_leave_policy && <Mod icon="leaf" title="Leave policy" sub="Configure leave types" onClick={() => open("leavePolicy")} />}
+      {caps.can_manage_shift_policy && <Mod icon="clock" cyan title="Shift policy" sub="Late / early / short rules" onClick={() => open("shiftPolicy")} />}
+      {caps.can_manage_regularization && <Mod icon="refresh" title="Regularization" sub="Resolve pending cases" onClick={() => open("regularization")} />}
+    </div>
+  </>;
 }
 
 function FaceAdmin({ employees, flash, selectedEmployee, onCameraActiveChange }: any) {
   const [employee, setEmployee] = useState(selectedEmployee || "");
   const [image, setImage] = useState("");
   const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
-  useEffect(() => {
-    if (selectedEmployee) setEmployee(selectedEmployee);
-  }, [selectedEmployee]);
+  useEffect(() => { if (selectedEmployee) setEmployee(selectedEmployee); }, [selectedEmployee]);
   const selected = (employees || []).find((item: any) => item.name === employee);
   const save = async () => {
-    if (!employee || !image) {
-      flash("Required fields", "Select employee and capture face before saving.");
-      return;
-    }
-    await runAction("save-face", async () => {
-      await call(API.registerEmployeeFace, { employee, face_image: image });
-      setImage("");
-    }, { successTitle: "Face registered", successMessage: "Server template saved for employee.", errorTitle: "Face failed" });
+    if (!employee || !image) { flash("Required fields", "Select employee and capture face before saving."); return; }
+    await runAction("save-face", async () => { await call(API.registerEmployeeFace, { employee, face_image: image }); setImage(""); }, { successTitle: "Face registered", successMessage: "Server template saved for employee.", errorTitle: "Face failed" });
   };
-  return <><Hero eyebrow="FACE ENROLLMENT" title="Register employee" grad="face template" text="Only authorized admin users can capture or update employee face data." /><div className="card accent card-pad"><Select label="Employee" value={employee} onChange={(value: string) => { setEmployee(value); setImage(""); window.dispatchEvent(new Event("jew-hrms-stop-camera")); }} options={(employees || []).map((e: any) => ({ value: e.name, label: e.label || e.employee_name || e.name, description: e.description || e.name }))} />{selected && <div className="notice"><UserRound size={18} /><div><b>{selected.employee_name || selected.name}</b><span>{selected.name} - {selected.face_registered ? `Registered${selected.face_last_updated_on ? ` - ${selected.face_last_updated_on}` : ""}` : "Not Registered"}</span></div></div>}<div className="mt"><LiveCamera image={image} onCapture={setImage} flash={flash} title="Keep your face inside the frame" disabled={!employee} disabledMessage="Please select employee first." onActiveChange={onCameraActiveChange} /></div><button className="btn btn-primary btn-wide mt" type="button" disabled={isAnyBusy || !employee || !image} onClick={save}>{isBusy("save-face") ? "Saving..." : "Save Face Template"}</button>{!(employees || []).length && <div className="notice mt"><HelpCircle size={18} /><div><b>No employees loaded</b><span>Open this screen from Admin after employee list loads.</span></div></div>}</div></>;
+  return <>
+    <Select label="Select employee" icon="user" value={employee} onChange={(value: string) => { setEmployee(value); setImage(""); window.dispatchEvent(new Event("jew-hrms-stop-camera")); }} options={(employees || []).map((e: any) => ({ value: e.name, label: e.label || e.employee_name || e.name, description: e.description || e.name }))} />
+    {selected && <div className="qrow" style={{ marginTop: 12 }}><div className="qa"><Ic name="user" /></div><div className="qt"><strong>{selected.employee_name || selected.name}</strong><span>{selected.name} · {selected.face_registered ? "Registered" : "Not registered"}</span></div></div>}
+    <div className="mt"><LiveCamera image={image} onCapture={setImage} flash={flash} disabled={!employee} disabledMessage="Please select employee first." onActiveChange={onCameraActiveChange} /></div>
+    <button className="btn mt" type="button" disabled={isAnyBusy || !employee || !image} onClick={save}><Ic name="check" /> {isBusy("save-face") ? "Saving…" : "Save face template"}</button>
+    {!(employees || []).length && <div className="empty"><h3>No employees loaded</h3><p>Open this screen from Admin after the employee list loads.</p></div>}
+  </>;
 }
 
-function LocationAdmin({ data, setData, flash, reload }: any) {
+function LiveCamera({ image, onCapture, flash, disabled = false, disabledMessage = "Please select employee first.", onActiveChange }: any) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [active, setActive] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [statusText, setStatusText] = useState("Camera ready");
+  const setCameraActive = (value: boolean) => { setActive(value); onActiveChange?.(value); };
+  const stop = () => {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+    setStarting(false); setCameraActive(false);
+  };
+  useEffect(() => {
+    const stopFromApp = () => stop();
+    window.addEventListener("jew-hrms-stop-camera", stopFromApp);
+    return () => { window.removeEventListener("jew-hrms-stop-camera", stopFromApp); stop(); };
+  }, []);
+  const start = async () => {
+    if (disabled) { flash("Employee required", disabledMessage); return; }
+    if (!navigator.mediaDevices?.getUserMedia) { flash("Camera failed", "Camera is not available on this device."); return; }
+    setStarting(true); setStatusText("Starting camera…");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 720 }, height: { ideal: 720 } }, audio: false });
+      streamRef.current = stream; setCameraActive(true);
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      const video = videoRef.current;
+      if (!video) throw new Error("camera_video_not_ready");
+      video.srcObject = stream; video.muted = true; video.playsInline = true;
+      await new Promise<void>((resolve) => { if (video.readyState >= 2) return resolve(); video.onloadedmetadata = () => resolve(); });
+      await video.play();
+      setStatusText("Keep your face inside the frame");
+    } catch (error: any) {
+      const name = error?.name || "";
+      stop();
+      flash("Camera failed", name === "NotAllowedError" || name === "PermissionDeniedError" ? "Camera permission denied. Please allow camera access." : "Camera is not available on this device.");
+    } finally { setStarting(false); }
+  };
+  const capture = () => {
+    const video = videoRef.current; const canvas = canvasRef.current;
+    if (!video || !canvas || !streamRef.current || video.videoWidth === 0) { flash("Camera", disabled ? disabledMessage : "Start camera before capturing face."); return; }
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+    canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
+    onCapture(canvas.toDataURL("image/jpeg", 0.9));
+    setStatusText("Face captured. Save or retake."); stop();
+  };
+  return (
+    <div>
+      <div className="facebox" style={{ height: 230 }}>
+        <span className="brk b1" /><span className="brk b2" /><span className="brk b3" /><span className="brk b4" />
+        {active ? <video ref={videoRef} autoPlay muted playsInline /> : image ? <img src={image} alt="Captured face" /> : <Ic name="camera" />}
+        <canvas ref={canvasRef} hidden />
+        <div className="scan"><span className={`chip ${active ? "ok" : image ? "pend" : "info"}`}>{active ? statusText : image ? "Face captured" : disabled ? "Select employee first" : "Camera ready"}</span></div>
+      </div>
+      <div style={{ marginTop: 14, display: "flex", gap: 9 }}>
+        <button className="btn ghost" type="button" disabled={starting || disabled} onClick={active ? stop : start}><Ic name="camera" /> {active ? "Stop" : starting ? "…" : "Start"}</button>
+        <button className="btn" type="button" disabled={!active || starting} onClick={capture}><Ic name="check" /> Capture</button>
+      </div>
+      {image && <button className="btn ghost mt" type="button" onClick={() => { onCapture(""); if (!disabled) start(); }}>Retake</button>}
+    </div>
+  );
+}
+
+function LocationAdmin({ data, flash, reload }: any) {
   const [form, setForm] = useState({ location_name: "", latitude: 21.1458, longitude: 79.0882, default_radius_meter: 100 });
   const [mapCenter, setMapCenter] = useState<[number, number]>([21.1458, 79.0882]);
   const [employee, setEmployee] = useState("");
@@ -1292,8 +976,7 @@ function LocationAdmin({ data, setData, flash, reload }: any) {
   const employeeOptions = (data.employees || []).map((e: any) => ({ value: e.name, label: e.label || e.employee_name || e.name, description: e.description || e.name }));
   const locationOptions = (data.locations || []).map((l: any) => ({ value: l.name, label: l.location_name || l.name, description: l.name }));
   const loadEmployeeLocations = async (employeeName: string) => {
-    setEmployee(employeeName);
-    setEmployeeLocations([]);
+    setEmployee(employeeName); setEmployeeLocations([]);
     if (!employeeName) return;
     const res = await runAction(`load-locations-${employeeName}`, () => call(API.getEmployeeLocations, { employee: employeeName }), { errorTitle: "Assignments failed" });
     if (res) setEmployeeLocations(res.locations || []);
@@ -1302,176 +985,245 @@ function LocationAdmin({ data, setData, flash, reload }: any) {
     await runAction("use-current-location", async () => {
       if (!navigator.geolocation) throw new Error("Location is not available on this device.");
       const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, () => reject(new Error("Could not get your location. Please turn on GPS/location and try again.")), {
-          enableHighAccuracy: true,
-          timeout: 15000,
-          maximumAge: 0
-        });
+        navigator.geolocation.getCurrentPosition(resolve, () => reject(new Error("Could not get your location. Please turn on GPS/location and try again.")), { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
       });
       const latitude = Number(position.coords.latitude.toFixed(7));
       const longitude = Number(position.coords.longitude.toFixed(7));
-      setForm((current) => ({ ...current, latitude, longitude }));
-      setMapCenter([latitude, longitude]);
+      setForm((current) => ({ ...current, latitude, longitude })); setMapCenter([latitude, longitude]);
       return position;
     }, { successTitle: "Location", successMessage: "Current location captured.", errorTitle: "Location failed" });
   };
   const save = async () => {
-    if (!form.location_name || form.latitude === null || form.longitude === null || !form.default_radius_meter) {
-      flash("Required fields", "Location name, latitude, longitude and radius are required.");
-      return;
-    }
-    await runAction("save-location", async () => {
-      await call(API.saveLocation, form);
-      reload();
-    }, { successTitle: "Location saved", successMessage: "Geofence updated.", errorTitle: "Location failed" });
+    if (!form.location_name || form.latitude === null || form.longitude === null || !form.default_radius_meter) { flash("Required fields", "Location name, latitude, longitude and radius are required."); return; }
+    await runAction("save-location", async () => { await call(API.saveLocation, form); reload(); }, { successTitle: "Location saved", successMessage: "Geofence updated.", errorTitle: "Location failed" });
   };
   const assign = async () => {
-    if (!employee || !location) {
-      flash("Required fields", "Select employee and location before assigning.");
-      return;
-    }
+    if (!employee || !location) { flash("Required fields", "Select employee and location before assigning."); return; }
     await runAction("assign-location", async () => {
       const selectedLocation = (data.locations || []).find((item: any) => item.name === location);
       const res = await call(API.assignEmployeeLocation, { employee, location, radius_meter: selectedLocation?.default_radius_meter });
-      setEmployeeLocations((current) => {
-        const nextAssignment = {
-          assignment: res.assignment,
-          name: selectedLocation?.name || location,
-          location_name: selectedLocation?.location_name || location,
-          radius_meter: Number(selectedLocation?.default_radius_meter || res.radius_meter || 100)
-        };
-        return [nextAssignment, ...current.filter((item) => item.name !== location && item.location !== location)];
-      });
+      setEmployeeLocations((current) => [{ assignment: res.assignment, name: selectedLocation?.name || location, location_name: selectedLocation?.location_name || location, radius_meter: Number(selectedLocation?.default_radius_meter || res.radius_meter || 100) }, ...current.filter((item) => item.name !== location && item.location !== location)]);
     }, { successTitle: "Assigned", successMessage: "Location assigned successfully.", errorTitle: "Assign failed" });
   };
   const deleteLocation = async (name: string) => {
-    await runAction(`delete-location-${name}`, async () => {
-      await call(API.deleteLocation, { name });
-      if (location === name) setLocation("");
-      await reload();
-    }, { successTitle: "Location deleted", successMessage: "Geofence removed.", errorTitle: "Delete failed" });
+    await runAction(`delete-location-${name}`, async () => { await call(API.deleteLocation, { name }); if (location === name) setLocation(""); await reload(); }, { successTitle: "Location deleted", successMessage: "Geofence removed.", errorTitle: "Delete failed" });
   };
   const removeAssignment = async (assignment: string) => {
-    await runAction(`remove-assignment-${assignment}`, async () => {
-      await call(API.removeEmployeeLocation, { assignment });
-      if (employee) {
-        const res = await call(API.getEmployeeLocations, { employee });
-        setEmployeeLocations(res.locations || []);
-      }
-      await reload();
-    }, { successTitle: "Assignment removed", successMessage: "Employee location assignment removed.", errorTitle: "Remove failed" });
+    await runAction(`remove-assignment-${assignment}`, async () => { await call(API.removeEmployeeLocation, { assignment }); if (employee) { const res = await call(API.getEmployeeLocations, { employee }); setEmployeeLocations(res.locations || []); } await reload(); }, { successTitle: "Assignment removed", successMessage: "Employee location assignment removed.", errorTitle: "Remove failed" });
   };
-  return <><Hero eyebrow="GEOFENCE" title="Assign employee" grad="locations" text="Create allowed attendance locations with latitude, longitude and radius." /><div className="card accent card-pad"><div className="map-box real-map"><MapContainer center={mapCenter} zoom={13} scrollWheelZoom={false}><MapRecenter center={mapCenter} /><TileLayer attribution="OpenStreetMap" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" /><PickLocation onPick={(lat, lng) => { setForm({ ...form, latitude: lat, longitude: lng }); setMapCenter([lat, lng]); }} /><Marker position={[form.latitude, form.longitude]} /><Circle center={[form.latitude, form.longitude]} radius={form.default_radius_meter} /></MapContainer></div><Field label="Location Name" value={form.location_name} onChange={(v: string) => setForm({ ...form, location_name: v })} /><div className="grid-2"><Field label="Latitude" type="number" value={form.latitude} onChange={(v: string) => { const latitude = Number(v); setForm({ ...form, latitude }); setMapCenter([latitude, form.longitude]); }} /><Field label="Longitude" type="number" value={form.longitude} onChange={(v: string) => { const longitude = Number(v); setForm({ ...form, longitude }); setMapCenter([form.latitude, longitude]); }} /></div><Field label="Radius Meter" type="number" value={form.default_radius_meter} onChange={(v: string) => setForm({ ...form, default_radius_meter: Number(v) })} /><button className="btn btn-cyan btn-wide" type="button" disabled={isAnyBusy} onClick={useCurrentLocation}>{isBusy("use-current-location") ? "Capturing..." : "Use Current Location"}</button><button className="btn btn-primary btn-wide mt" type="button" disabled={isAnyBusy || !form.location_name || !form.latitude || !form.longitude || !form.default_radius_meter} onClick={save}>{isBusy("save-location") ? "Saving..." : "Save Location"}</button></div><div className="card mt card-pad"><div className="grid-2"><Select label="Employee" value={employee} onChange={loadEmployeeLocations} options={employeeOptions} /><Select label="Location" value={location} onChange={setLocation} options={locationOptions} /></div><button className="btn btn-cyan btn-wide" type="button" disabled={isAnyBusy || !employee || !location} onClick={assign}>{isBusy("assign-location") ? "Assigning..." : "Assign Location"}</button></div><div className="card mt"><div className="card-head"><h2>Saved Locations</h2></div><div className="card-pad list">{(data.locations || []).length ? data.locations.map((item: any) => <div className="list-item stack" key={item.name}><div><strong>{item.location_name || item.name}</strong><span>{item.latitude}, {item.longitude} | {item.default_radius_meter} m</span></div><button className="btn btn-danger" type="button" disabled={isAnyBusy} onClick={() => deleteLocation(item.name)}>{isBusy(`delete-location-${item.name}`) ? "Deleting..." : "Delete Location"}</button></div>) : <Empty text="No saved locations." />}</div></div><div className="card mt"><div className="card-head"><h2>Employee Assignments</h2></div><div className="card-pad list">{employee ? (employeeLocations.length ? employeeLocations.map((item: any) => <div className="list-item stack" key={item.assignment || item.name}><div><strong>{item.location_name || item.name}</strong><span>{item.radius_meter} m radius</span></div><button className="btn btn-danger" type="button" disabled={isAnyBusy} onClick={() => removeAssignment(item.assignment)}>{isBusy(`remove-assignment-${item.assignment}`) ? "Removing..." : "Remove Assignment"}</button></div>) : <Empty text="No active assignments for selected employee." />) : <Empty text="Select employee to view assignments." />}</div></div></>;
+  return <>
+    <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+      <div className="map-box"><MapContainer center={mapCenter} zoom={13} scrollWheelZoom={false}><MapRecenter center={mapCenter} /><TileLayer attribution="OpenStreetMap" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" /><PickLocation onPick={(lat, lng) => { setForm({ ...form, latitude: lat, longitude: lng }); setMapCenter([lat, lng]); }} /><Marker position={[form.latitude, form.longitude]} /><Circle center={[form.latitude, form.longitude]} radius={form.default_radius_meter} /></MapContainer></div>
+      <div style={{ padding: 15 }}>
+        <Field label="Location name" value={form.location_name} onChange={(v: string) => setForm({ ...form, location_name: v })} />
+        <div className="grid2" style={{ marginTop: 13 }}>
+          <Field label="Latitude" type="number" value={String(form.latitude)} onChange={(v: string) => { const latitude = Number(v); setForm({ ...form, latitude }); setMapCenter([latitude, form.longitude]); }} />
+          <Field label="Longitude" type="number" value={String(form.longitude)} onChange={(v: string) => { const longitude = Number(v); setForm({ ...form, longitude }); setMapCenter([form.latitude, longitude]); }} />
+        </div>
+        <Field label="Radius (m)" type="number" value={String(form.default_radius_meter)} onChange={(v: string) => setForm({ ...form, default_radius_meter: Number(v) })} />
+        <button className="btn ghost mt" type="button" disabled={isAnyBusy} onClick={useCurrentLocation}><Ic name="pin" /> {isBusy("use-current-location") ? "Capturing…" : "Use current location"}</button>
+        <button className="btn mt" type="button" disabled={isAnyBusy || !form.location_name} onClick={save}><Ic name="check" /> {isBusy("save-location") ? "Saving…" : "Save location"}</button>
+      </div>
+    </div>
+    <div className="card mt">
+      <Select label="Employee" value={employee} onChange={loadEmployeeLocations} options={employeeOptions} />
+      <Select label="Location" value={location} onChange={setLocation} options={locationOptions} />
+      <button className="btn ghost mt" type="button" disabled={isAnyBusy || !employee || !location} onClick={assign}><Ic name="plus" /> {isBusy("assign-location") ? "Assigning…" : "Assign location"}</button>
+    </div>
+    <div className="sec-lab">Saved locations</div>
+    <div className="list card" style={{ padding: "4px 15px" }}>
+      {(data.locations || []).length ? data.locations.map((item: any) => (
+        <div className="row" key={item.name}><div className="prow" style={{ border: 0, padding: 0, flex: 1 }}><div className="pi"><Ic name="building" /></div><div className="pt"><strong>{item.location_name || item.name}</strong><span>{item.latitude}, {item.longitude} · {item.default_radius_meter} m</span></div></div><button className="btn danger sm" style={{ width: "auto", padding: "0 12px" }} type="button" disabled={isAnyBusy} onClick={() => deleteLocation(item.name)}>{isBusy(`delete-location-${item.name}`) ? "…" : "Delete"}</button></div>
+      )) : <div className="empty"><h3>No locations</h3><p>No saved locations yet.</p></div>}
+    </div>
+    <div className="sec-lab">Employee assignments</div>
+    <div className="list card" style={{ padding: "4px 15px" }}>
+      {employee ? (employeeLocations.length ? employeeLocations.map((item: any) => (
+        <div className="row" key={item.assignment || item.name}><div className="prow" style={{ border: 0, padding: 0, flex: 1 }}><div className="pi"><Ic name="pin" /></div><div className="pt"><strong>{item.location_name || item.name}</strong><span>{item.radius_meter} m radius</span></div></div><button className="btn danger sm" style={{ width: "auto", padding: "0 12px" }} type="button" disabled={isAnyBusy} onClick={() => removeAssignment(item.assignment)}>{isBusy(`remove-assignment-${item.assignment}`) ? "…" : "Remove"}</button></div>
+      )) : <div className="empty"><h3>No assignments</h3><p>No active assignments for selected employee.</p></div>) : <div className="empty"><h3>Select employee</h3><p>Select an employee to view assignments.</p></div>}
+    </div>
+  </>;
 }
 
 function LeavePolicy({ types, flash, reload }: any) {
   const [form, setForm] = useState({ name: "", leave_type_name: "", is_lwp: false });
   const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
   const save = async () => {
-    if (!form.name && !form.leave_type_name) {
-      flash("Required fields", "Leave type is required.");
-      return;
-    }
-    await runAction("save-leave-type", async () => {
-      await call(API.saveLeaveType, form);
-      await reload();
-      setForm({ name: "", leave_type_name: "", is_lwp: false });
-    }, { successTitle: "Leave type saved", errorTitle: "Save failed" });
+    if (!form.name && !form.leave_type_name) { flash("Required fields", "Leave type is required."); return; }
+    await runAction("save-leave-type", async () => { await call(API.saveLeaveType, form); await reload(); setForm({ name: "", leave_type_name: "", is_lwp: false }); }, { successTitle: "Leave type saved", errorTitle: "Save failed" });
   };
-  return <><Hero eyebrow="LEAVE POLICY" title="Configure" grad="leave types" text="HR/Admin managed leave types used by employee leave apply." /><div className="card accent card-pad"><div className="grid-2"><Field label="Leave Type Code" value={form.name} onChange={(v: string) => setForm({ ...form, name: v.toUpperCase() })} /><Field label="Leave Type Name" value={form.leave_type_name} onChange={(v: string) => setForm({ ...form, leave_type_name: v })} /><label className="check"><input type="checkbox" checked={form.is_lwp} onChange={(e) => setForm({ ...form, is_lwp: e.target.checked })} /> LWP</label></div><button className="btn btn-primary btn-wide" type="button" disabled={isAnyBusy} onClick={save}>{isBusy("save-leave-type") ? "Saving..." : "Save Leave Type"}</button></div><div className="card mt"><div className="card-head"><h2>Configured Leave Types</h2></div><div className="card-pad list">{types.length ? types.map((t: any) => <div className="list-item" key={t.name}><div><strong>{t.name}</strong><span>{t.leave_type_name || t.name}</span></div><span className={`status ${t.is_lwp ? "pending" : "ok"}`}>{t.is_lwp ? "LWP" : "Paid"}</span></div>) : <Empty text="No leave types configured." />}</div></div></>;
+  return <>
+    <div className="card">
+      <div className="grid2">
+        <Field label="Type code" value={form.name} onChange={(v: string) => setForm({ ...form, name: v.toUpperCase() })} />
+        <Field label="Type name" value={form.leave_type_name} onChange={(v: string) => setForm({ ...form, leave_type_name: v })} />
+      </div>
+      <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 13, color: "var(--muted)", fontSize: 12.5, fontWeight: 600 }}><input type="checkbox" style={{ accentColor: "var(--iris)" }} checked={form.is_lwp} onChange={(e) => setForm({ ...form, is_lwp: e.target.checked })} /> LWP (unpaid)</label>
+      <button className="btn mt" type="button" disabled={isAnyBusy} onClick={save}><Ic name="check" /> {isBusy("save-leave-type") ? "Saving…" : "Save leave type"}</button>
+    </div>
+    <div className="sec-lab">Configured leave types</div>
+    <div className="list card" style={{ padding: "4px 15px" }}>
+      {types.length ? types.map((t: any) => <div className="row" key={t.name}><div className="mid"><strong>{t.name}</strong><span>{t.leave_type_name || t.name}</span></div><Chip kind={t.is_lwp ? "pend" : "ok"}>{t.is_lwp ? "LWP" : "Paid"}</Chip></div>) : <div className="empty"><h3>None</h3><p>No leave types configured.</p></div>}
+    </div>
+  </>;
 }
 
 function ShiftPolicy({ policies, flash, reload }: any) {
   const [form, setForm] = useState<any>({ shift_name: "General", shift_start_time: "09:30:00", shift_end_time: "18:30:00", break_minutes: 60, full_day_minimum_hours: 8, half_day_minimum_hours: 4, late_coming_grace_minutes: 10, early_going_grace_minutes: 10, max_late_coming_allowed_per_month: 0, max_early_going_allowed_per_month: 0, max_short_hours_allowed_per_month: 0, action_after_late_limit: "Regularization Required", action_after_early_limit: "Regularization Required", action_after_short_hours_limit: "Regularization Required", is_active: 1 });
   const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
   const actionOptions = ["Warn Only", "Regularization Required", "Mark Half Day", "Mark LWP", "Block Attendance"];
-  const edit = (policy: any) => setForm({ ...form, ...policy });
-  const save = async () => {
-    await runAction("save-shift-policy", async () => {
-      await call(API.saveShiftPolicy, form);
-      await reload();
-    }, { successTitle: "Policy saved", errorTitle: "Policy failed" });
-  };
-  return <><Hero eyebrow="SHIFT POLICY" title="Late, early and" grad="short-hours rules" text="Configurable attendance policy for HR/Admin." /><div className="card accent card-pad"><div className="grid-2"><Field label="Shift Name" value={form.shift_name} onChange={(v: string) => setForm({ ...form, shift_name: v })} /><Field label="Shift Start" type="time" value={String(form.shift_start_time || "").slice(0, 5)} onChange={(v: string) => setForm({ ...form, shift_start_time: v })} /><Field label="Shift End" type="time" value={String(form.shift_end_time || "").slice(0, 5)} onChange={(v: string) => setForm({ ...form, shift_end_time: v })} /><Field label="Break Minutes" type="number" value={form.break_minutes} onChange={(v: string) => setForm({ ...form, break_minutes: Number(v) })} /><Field label="Full Day Hours" type="number" value={form.full_day_minimum_hours} onChange={(v: string) => setForm({ ...form, full_day_minimum_hours: Number(v) })} /><Field label="Half Day Hours" type="number" value={form.half_day_minimum_hours} onChange={(v: string) => setForm({ ...form, half_day_minimum_hours: Number(v) })} /><Field label="Late Grace Min" type="number" value={form.late_coming_grace_minutes} onChange={(v: string) => setForm({ ...form, late_coming_grace_minutes: Number(v) })} /><Field label="Early Grace Min" type="number" value={form.early_going_grace_minutes} onChange={(v: string) => setForm({ ...form, early_going_grace_minutes: Number(v) })} /><Field label="Max Late / Month" type="number" value={form.max_late_coming_allowed_per_month} onChange={(v: string) => setForm({ ...form, max_late_coming_allowed_per_month: Number(v) })} /><Field label="Max Early / Month" type="number" value={form.max_early_going_allowed_per_month} onChange={(v: string) => setForm({ ...form, max_early_going_allowed_per_month: Number(v) })} /><Field label="Max Short / Month" type="number" value={form.max_short_hours_allowed_per_month} onChange={(v: string) => setForm({ ...form, max_short_hours_allowed_per_month: Number(v) })} /><Select label="Late Action" value={form.action_after_late_limit} onChange={(v: string) => setForm({ ...form, action_after_late_limit: v })} options={actionOptions} /><Select label="Early Action" value={form.action_after_early_limit} onChange={(v: string) => setForm({ ...form, action_after_early_limit: v })} options={actionOptions} /><Select label="Short Hours Action" value={form.action_after_short_hours_limit} onChange={(v: string) => setForm({ ...form, action_after_short_hours_limit: v })} options={actionOptions} /><label className="check"><input type="checkbox" checked={Boolean(Number(form.is_active))} onChange={(e) => setForm({ ...form, is_active: e.target.checked ? 1 : 0 })} /> Active</label></div><button className="btn btn-primary btn-wide" type="button" disabled={isAnyBusy} onClick={save}>{isBusy("save-shift-policy") ? "Saving..." : "Save Policy"}</button></div><div className="card mt"><div className="card-head"><h2>Policies</h2></div><div className="card-pad list">{policies.length ? policies.map((p: any) => <button className="list-item" key={p.name} type="button" onClick={() => edit(p)}><div><strong>{p.shift_name}</strong><span>{String(p.shift_start_time).slice(0, 5)} to {String(p.shift_end_time).slice(0, 5)}</span></div><span className={`status ${p.is_active ? "ok" : "pending"}`}>{p.is_active ? "Active" : "Inactive"}</span></button>) : <Empty text="No shift policy configured." />}</div></div></>;
+  const save = async () => { await runAction("save-shift-policy", async () => { await call(API.saveShiftPolicy, form); await reload(); }, { successTitle: "Policy saved", errorTitle: "Policy failed" }); };
+  return <>
+    <div className="card">
+      <div className="grid2">
+        <Field label="Shift name" value={form.shift_name} onChange={(v: string) => setForm({ ...form, shift_name: v })} />
+        <Field label="Start" type="time" value={String(form.shift_start_time || "").slice(0, 5)} onChange={(v: string) => setForm({ ...form, shift_start_time: v })} />
+        <Field label="End" type="time" value={String(form.shift_end_time || "").slice(0, 5)} onChange={(v: string) => setForm({ ...form, shift_end_time: v })} />
+        <Field label="Break (min)" type="number" value={String(form.break_minutes)} onChange={(v: string) => setForm({ ...form, break_minutes: Number(v) })} />
+        <Field label="Full day hrs" type="number" value={String(form.full_day_minimum_hours)} onChange={(v: string) => setForm({ ...form, full_day_minimum_hours: Number(v) })} />
+        <Field label="Half day hrs" type="number" value={String(form.half_day_minimum_hours)} onChange={(v: string) => setForm({ ...form, half_day_minimum_hours: Number(v) })} />
+        <Field label="Late grace" type="number" value={String(form.late_coming_grace_minutes)} onChange={(v: string) => setForm({ ...form, late_coming_grace_minutes: Number(v) })} />
+        <Field label="Early grace" type="number" value={String(form.early_going_grace_minutes)} onChange={(v: string) => setForm({ ...form, early_going_grace_minutes: Number(v) })} />
+      </div>
+      <Select label="Late action" value={form.action_after_late_limit} onChange={(v: string) => setForm({ ...form, action_after_late_limit: v })} options={actionOptions} />
+      <Select label="Early action" value={form.action_after_early_limit} onChange={(v: string) => setForm({ ...form, action_after_early_limit: v })} options={actionOptions} />
+      <Select label="Short hours action" value={form.action_after_short_hours_limit} onChange={(v: string) => setForm({ ...form, action_after_short_hours_limit: v })} options={actionOptions} />
+      <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 13, color: "var(--muted)", fontSize: 12.5, fontWeight: 600 }}><input type="checkbox" style={{ accentColor: "var(--iris)" }} checked={Boolean(Number(form.is_active))} onChange={(e) => setForm({ ...form, is_active: e.target.checked ? 1 : 0 })} /> Active</label>
+      <button className="btn mt" type="button" disabled={isAnyBusy} onClick={save}><Ic name="check" /> {isBusy("save-shift-policy") ? "Saving…" : "Save policy"}</button>
+    </div>
+    <div className="sec-lab">Policies</div>
+    <div className="list card" style={{ padding: "4px 15px" }}>
+      {policies.length ? policies.map((p: any) => <button className="row" style={{ width: "100%", textAlign: "left" }} key={p.name} type="button" onClick={() => setForm({ ...form, ...p })}><div className="mid"><strong>{p.shift_name}</strong><span>{String(p.shift_start_time).slice(0, 5)} → {String(p.shift_end_time).slice(0, 5)}</span></div><Chip kind={p.is_active ? "ok" : "pend"}>{p.is_active ? "Active" : "Inactive"}</Chip></button>) : <div className="empty"><h3>None</h3><p>No shift policy configured.</p></div>}
+    </div>
+  </>;
 }
 
 function Regularization({ items, flash, reload }: any) {
   const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
   const decide = async (name: string, action: string) => {
     const remarks = action === "Rejected" ? window.prompt("Reject reason") || "" : window.prompt("Remarks") || "";
-    await runAction(`${action}-${name}`, async () => {
-      await call(API.decideRegularization, { name, action, remarks });
-      await reload();
-    }, { successTitle: "Updated", successMessage: "Regularization updated.", errorTitle: "Update failed" });
+    await runAction(`${action}-${name}`, async () => { await call(API.decideRegularization, { name, action, remarks }); await reload(); }, { successTitle: "Updated", successMessage: "Regularization updated.", errorTitle: "Update failed" });
   };
-  return <><Hero eyebrow="REGULARIZATION" title="Pending" grad="attendance review" text="Review missing mark out, late, early and short-hours cases." /><div className="card"><div className="card-pad list">{items.length ? items.map((r: any) => <div className="list-item stack" key={r.name}><div><strong>{r.employee}</strong><span>{r.attendance_date} | {r.issue_type} | {r.policy_action || "Review"}</span></div><div className="btn-row"><button className="btn btn-cyan" type="button" disabled={isAnyBusy} onClick={() => decide(r.name, "Approved as Present")}>{isBusy(`Approved as Present-${r.name}`) ? "Saving..." : "Present"}</button><button className="btn" type="button" disabled={isAnyBusy} onClick={() => decide(r.name, "Marked Half Day")}>Half Day</button><button className="btn btn-danger" type="button" disabled={isAnyBusy} onClick={() => decide(r.name, "Rejected")}>Reject</button></div></div>) : <Empty text="No pending regularization." />}</div></div></>;
+  return <>
+    {items.length ? items.map((r: any) => (
+      <div className="card" style={{ marginBottom: 11 }} key={r.name}>
+        <div style={{ display: "flex", alignItems: "center", gap: 11 }}><div className="qa" style={{ width: 38, height: 38, borderRadius: 11, background: "var(--iris-tint)", color: "var(--iris)", display: "grid", placeItems: "center" }}><Ic name="refresh" style={{ width: 17, height: 17 }} /></div><div style={{ flex: 1, minWidth: 0 }}><strong style={{ fontSize: 13 }}>{r.employee}</strong><div style={{ fontSize: 11, color: "var(--faint)" }}>{r.attendance_date} · {r.issue_type} · {r.policy_action || "Review"}</div></div></div>
+        <div style={{ display: "flex", gap: 9, marginTop: 12 }}>
+          <button className="btn ok sm" style={{ flex: 1 }} type="button" disabled={isAnyBusy} onClick={() => decide(r.name, "Approved as Present")}>{isBusy(`Approved as Present-${r.name}`) ? "…" : "Present"}</button>
+          <button className="btn ghost sm" style={{ flex: 1 }} type="button" disabled={isAnyBusy} onClick={() => decide(r.name, "Marked Half Day")}>Half day</button>
+          <button className="btn danger sm" style={{ flex: 1 }} type="button" disabled={isAnyBusy} onClick={() => decide(r.name, "Rejected")}>Reject</button>
+        </div>
+      </div>
+    )) : <div className="empty"><h3>All clear</h3><p>No pending regularization.</p></div>}
+  </>;
 }
 
 function LeaveApproval({ leaves, flash, reload }: any) {
   const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
   const decide = async (name: string, approve: boolean) => {
     const remarks = approve ? "" : window.prompt("Rejection remarks") || "";
-    if (!approve && !remarks.trim()) {
-      flash("Reject Reason required", "Reject Reason required.");
-      return;
-    }
-    await runAction(`${approve ? "approve" : "reject"}-${name}`, async () => {
-      await call(approve ? API.approveLeave : API.rejectLeave, { name, remarks });
-      reload();
-    }, { successTitle: approve ? "Approved" : "Rejected", successMessage: "Leave request updated.", errorTitle: approve ? "Approve failed" : "Reject failed" });
+    if (!approve && !remarks.trim()) { flash("Reject Reason required", "Reject Reason required."); return; }
+    await runAction(`${approve ? "approve" : "reject"}-${name}`, async () => { await call(approve ? API.approveLeave : API.rejectLeave, { name, remarks }); reload(); }, { successTitle: approve ? "Approved" : "Rejected", successMessage: "Leave request updated.", errorTitle: approve ? "Approve failed" : "Reject failed" });
   };
-  return <><Hero eyebrow="APPROVAL QUEUE" title="Review pending" grad="leave requests" text="Approve or reject employee leave requests with remarks." /><div className="card"><div className="card-pad list">{leaves.length ? leaves.map((l: any) => { const status = l.approval_status || l.jew_hrms_approval_status || l.status; return <div className="list-item stack" key={l.name}><div><strong>{l.employee_name || l.employee}</strong><span>{l.leave_type} | {l.from_date} to {l.to_date}{l.half_day ? " | Half Day" : ""}</span></div><div className="btn-row"><span className="status pending">{status}</span><button className="btn btn-cyan" type="button" disabled={isAnyBusy} onClick={() => decide(l.name, true)}>{isBusy(`approve-${l.name}`) ? "Approving..." : status === "Pending Admin Approval" ? "Final Approve" : "Approve"}</button><button className="btn btn-danger" type="button" disabled={isAnyBusy} onClick={() => decide(l.name, false)}>{isBusy(`reject-${l.name}`) ? "Rejecting..." : "Reject"}</button></div></div>; }) : <Empty text="No pending leave requests." />}</div></div></>;
+  return <>
+    {leaves.length ? leaves.map((l: any) => {
+      const st = l.approval_status || l.jew_hrms_approval_status || l.status;
+      const nm = l.employee_name || l.employee;
+      return <div className="card" style={{ marginBottom: 11 }} key={l.name}>
+        <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
+          <div className="qa" style={{ width: 38, height: 38, borderRadius: 11, background: "var(--iris-tint)", color: "var(--iris)", display: "grid", placeItems: "center", fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: 13 }}>{empInitials(nm)}</div>
+          <div style={{ flex: 1, minWidth: 0 }}><strong style={{ fontSize: 13 }}>{nm}</strong><div style={{ fontSize: 11, color: "var(--faint)" }}>{l.leave_type} · <span className="num cy">{l.from_date} → {l.to_date}</span>{l.half_day ? " · Half day" : ""}</div></div>
+          <Chip kind="pend">{st}</Chip>
+        </div>
+        <div style={{ display: "flex", gap: 9, marginTop: 12 }}>
+          <button className="btn ok sm" style={{ flex: 1 }} type="button" disabled={isAnyBusy} onClick={() => decide(l.name, true)}><Ic name="check" /> {isBusy(`approve-${l.name}`) ? "…" : st === "Pending Admin Approval" ? "Final approve" : "Approve"}</button>
+          <button className="btn danger sm" style={{ flex: 1 }} type="button" disabled={isAnyBusy} onClick={() => decide(l.name, false)}><Ic name="close" /> {isBusy(`reject-${l.name}`) ? "…" : "Reject"}</button>
+        </div>
+      </div>;
+    }) : <div className="empty"><h3>All clear</h3><p>No pending leave requests.</p></div>}
+  </>;
 }
 
 function Employees({ employees, open, selectEmployee }: any) {
   const [query, setQuery] = useState("");
-  const [active, setActive] = useState<any>(null);
-  const filtered = (employees || []).filter((employee: any) => {
-    const haystack = `${employee.name} ${employee.employee_name || ""} ${employee.department || ""} ${employee.designation || ""}`.toLowerCase();
-    return haystack.includes(query.toLowerCase());
-  });
-  const openFace = (employee: any) => {
-    selectEmployee(employee.name);
-    open("face");
-  };
-  return <><Hero eyebrow="EMPLOYEES" title="Admin" grad="overview" text="Face and location setup status for active employees." /><div className="card accent card-pad"><div className="field"><label>Search</label><input className="input" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search employee name, ID, department" /></div></div><div className="card mt"><div className="card-pad list">{filtered.length ? filtered.map((e: any) => <div className="list-item stack" key={e.name} onClick={() => setActive(active?.name === e.name ? null : e)}><div className="profile-line"><div className="avatar">{(e.employee_name || e.name).slice(0, 1)}</div><div><strong>{e.employee_name || e.name}</strong><span>{e.department || e.designation || e.name}</span></div></div><div className="pills"><span className={`status ${e.face_registered ? "ok" : "pending"}`}>Face</span><span className={`status ${e.location_count ? "ok" : "pending"}`}>Location</span></div>{active?.name === e.name && <div className="notice"><UserRound size={18} /><div><b>{e.name}</b><span>{e.designation || "Employee"} {e.user_id ? `| ${e.user_id}` : ""}</span><button className="btn btn-primary mt" type="button" onClick={(event) => { event.stopPropagation(); openFace(e); }}>Face Register</button></div></div>}</div>) : <Empty text="No employee data loaded." />}</div></div></>;
+  const filtered = (employees || []).filter((employee: any) => `${employee.name} ${employee.employee_name || ""} ${employee.department || ""} ${employee.designation || ""}`.toLowerCase().includes(query.toLowerCase()));
+  const openFace = (employee: any) => { selectEmployee(employee.name); open("face"); };
+  return <>
+    <div className="inp" style={{ marginBottom: 4 }}><Ic name="search" /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by name or ID" /></div>
+    <div className="sec-lab">All employees <span className="num" style={{ color: "var(--faint)" }}>{filtered.length}</span></div>
+    <div className="list card" style={{ padding: "4px 15px" }}>
+      {filtered.length ? filtered.map((e: any) => (
+        <div className="row" key={e.name} onClick={() => openFace(e)} style={{ cursor: "pointer" }}>
+          <div className="qa" style={{ width: 36, height: 36, borderRadius: 11, background: "var(--iris-tint)", color: "var(--iris)", display: "grid", placeItems: "center", fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: 12 }}>{empInitials(e.employee_name || e.name)}</div>
+          <div className="mid"><strong>{e.employee_name || e.name}</strong><span>{e.department || e.designation || e.name}</span></div>
+          <div style={{ display: "flex", gap: 6 }}><Chip kind={e.face_registered ? "ok" : "pend"}>Face</Chip><Chip kind={e.location_count ? "ok" : "pend"}>Loc</Chip></div>
+        </div>
+      )) : <div className="empty"><h3>No employees</h3><p>No employee data loaded.</p></div>}
+    </div>
+  </>;
 }
 
 function Notifications({ items }: any) {
-  return <><Hero eyebrow="NOTIFICATIONS" title="Alerts and" grad="reminders" text="In-app alerts now; Firebase push can be added later." /><div className="list">{items.length ? items.map((n: any, i: number) => <div className="notice" key={i}><Bell size={18} /><div><b>{n.title}</b><span>{n.message}</span></div></div>) : <Empty text="No notifications." />}</div></>;
+  return <>
+    {items.length ? items.map((n: any, i: number) => (
+      <div className="qrow" key={i}><div className="qa"><Ic name="bell" style={{ width: 17, height: 17 }} /></div><div className="qt"><strong>{n.title}</strong><span>{n.message}</span></div></div>
+    )) : <div className="empty"><h3>No notifications</h3><p>You're all caught up.</p></div>}
+  </>;
 }
 
 function Profile({ profile, open, onLogout }: any) {
   const [loggingOut, setLoggingOut] = useState(false);
-  const doLogout = async () => {
-    setLoggingOut(true);
-    try {
-      await onLogout();
-    } finally {
-      setLoggingOut(false);
-    }
-  };
-  return <><Hero eyebrow="MY PROFILE" title="Employee" grad="profile" text="Your HRMS identity, shift, face status and assigned locations." /><div className="card accent card-pad"><div className="profile-line"><UserRound size={42} /><div><h2>{profile?.employee_name || "Employee"}</h2><p>{profile?.designation || profile?.department || profile?.employee}</p></div></div><div className="pills mt"><span className="pill">{profile?.status || "Active"}</span><span className="pill">{profile?.default_shift || "General Shift"}</span><span className="pill">{profile?.face_status?.registered ? "Face Ready" : "Face Pending"}</span></div><button className="btn btn-danger btn-wide mt" type="button" disabled={loggingOut} onClick={doLogout}><LogOut size={16} /> {loggingOut ? "Logging out..." : "Logout"}</button><button className="btn btn-wide mt" type="button" onClick={() => open("settings")}><HelpCircle size={16} /> Settings / Help</button></div></>;
+  const doLogout = async () => { setLoggingOut(true); try { await onLogout(); } finally { setLoggingOut(false); } };
+  const name = profile?.employee_name || "Employee";
+  return <>
+    <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+      <div className="avatar">{empInitials(name)}</div>
+      <div><strong style={{ fontSize: 17, letterSpacing: "-.02em" }}>{name}</strong>
+        <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{profile?.designation || profile?.department || "Employee"}</div>
+        <span className="chip data" style={{ marginTop: 7 }}><Ic name="user" /> {profile?.employee || profile?.employee_id || ""}</span>
+      </div>
+    </div>
+    <div className="card" style={{ marginTop: 16, padding: "4px 15px" }}>
+      <div className="prow"><div className="pi"><Ic name="building" /></div><div className="pt"><strong>Department</strong><span>{profile?.department || "—"}</span></div></div>
+      <div className="prow"><div className="pi"><Ic name="clock" /></div><div className="pt"><strong>Shift</strong></div><span className="pv">{profile?.default_shift || "General"}</span></div>
+      <div className="prow"><div className="pi"><Ic name="user" /></div><div className="pt"><strong>Status</strong></div><span className="pv">{profile?.status || "Active"}</span></div>
+      <div className="prow"><div className="pi"><Ic name="camera" /></div><div className="pt"><strong>Face</strong></div><span className="pv">{profile?.face_status?.registered ? "Ready" : "Pending"}</span></div>
+      <div className="prow"><div className="pi"><Ic name="mail" /></div><div className="pt"><strong>User</strong><span>{profile?.user_id || "—"}</span></div></div>
+    </div>
+    <button className="btn ghost mt" type="button" onClick={() => open("settings")}><Ic name="gear" /> Settings</button>
+    <button className="btn danger mt" type="button" disabled={loggingOut} onClick={doLogout}><Ic name="logout" /> {loggingOut ? "Logging out…" : "Log out"}</button>
+  </>;
 }
 
 function Settings({ theme, setTheme, onLogout }: any) {
   const [loggingOut, setLoggingOut] = useState(false);
-  const doLogout = async () => {
-    setLoggingOut(true);
-    try {
-      await onLogout();
-    } finally {
-      setLoggingOut(false);
-    }
-  };
-  return <><Hero eyebrow="SETTINGS" title="App" grad="support" text="Thin APK mode, hosted by the JEW Frappe site." /><div className="card card-pad list"><div className="notice"><ShieldCheck size={18} /><div><b>Thin APK</b><span>Loads https://jewipl.duxdigitech.in/jew-hrms/m</span></div></div><div className="notice"><Camera size={18} /><div><b>Permissions</b><span>Camera and location are used only for attendance.</span></div></div><button className="btn btn-wide" type="button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? "Light Mode" : "Dark Mode"}</button><button className="btn btn-danger btn-wide" type="button" disabled={loggingOut} onClick={doLogout}>{loggingOut ? "Logging out..." : "Logout"}</button><div className="notice"><HelpCircle size={18} /><div><b>Help / Support</b><span>Please contact HR or DUX Digitech support for app access, face registration, and location assignment.</span></div></div></div></>;
+  const doLogout = async () => { setLoggingOut(true); try { await onLogout(); } finally { setLoggingOut(false); } };
+  const dark = theme === "dark";
+  return <>
+    <div className="sec-lab">Appearance</div>
+    <div className="card" style={{ padding: "4px 15px" }}>
+      <div className="prow"><div className="pi"><Ic name={dark ? "moon" : "sun"} /></div><div className="pt"><strong>Dark theme</strong><span>Instrument mode for low light</span></div><button className={`switch ${dark ? "on" : ""}`} onClick={() => setTheme(dark ? "light" : "dark")} /></div>
+    </div>
+    <div className="sec-lab">Attendance</div>
+    <div className="card" style={{ padding: "4px 15px" }}>
+      <div className="prow"><div className="pi"><Ic name="camera" /></div><div className="pt"><strong>Face verification</strong><span>Required to mark attendance</span></div><Chip kind="ok">On</Chip></div>
+      <div className="prow"><div className="pi"><Ic name="pin" /></div><div className="pt"><strong>Geofence check</strong><span>Must be on-site to punch</span></div><Chip kind="ok">On</Chip></div>
+    </div>
+    <div className="sec-lab">About</div>
+    <div className="card" style={{ padding: "4px 15px" }}>
+      <div className="prow"><div className="pt"><strong>Server</strong></div><span className="pv" style={{ color: "var(--muted)" }}>jewipl.duxdigitech.in</span></div>
+      <div className="prow"><div className="pt"><strong>Mode</strong></div><span className="pv">Thin APK</span></div>
+    </div>
+    <button className="btn danger mt" type="button" disabled={loggingOut} onClick={doLogout}><Ic name="logout" /> {loggingOut ? "Logging out…" : "Log out"}</button>
+    <div className="empty"><p>Built by <b style={{ color: "var(--muted)" }}>DUX Digitech</b> · Where business gets digital</p></div>
+  </>;
 }
 
-function Field({ label, value, onChange, type = "text" }: any) {
-  return <div className="field"><label>{label}</label><input className="input" type={type} value={value ?? ""} onChange={(e) => onChange(e.target.value)} /></div>;
+function Field({ label, value, onChange, type = "text", icon, placeholder }: any) {
+  return <div className="field"><label>{label}</label><div className="inp">{icon && <Ic name={icon} />}<input type={type} value={value ?? ""} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} /></div></div>;
 }
 
-function Select({ label, value, onChange, options }: any) {
+function Select({ label, value, onChange, options, icon }: any) {
   const normalized = useMemo(() => (options || []).map((option: any) => {
     const optionValue = typeof option === "string" ? option : option.value;
     const baseText = typeof option === "string" ? option : option.label;
@@ -1482,50 +1234,29 @@ function Select({ label, value, onChange, options }: any) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement | null>(null);
-  const selected = normalized.find((option: any) => option.value === value);
-  const filtered = normalized.filter((option: any) => {
-    const haystack = `${option.label} ${option.description || ""} ${option.value}`.toLowerCase();
-    return haystack.includes(query.trim().toLowerCase());
-  });
-
+  const selected = normalized.find((o: any) => o.value === value);
+  const filtered = normalized.filter((o: any) => `${o.label} ${o.description || ""} ${o.value}`.toLowerCase().includes(query.trim().toLowerCase()));
   useEffect(() => {
     if (!open) return;
     const timer = window.setTimeout(() => searchRef.current?.focus(), 50);
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
     window.addEventListener("keydown", onKey);
-    return () => {
-      window.clearTimeout(timer);
-      window.removeEventListener("keydown", onKey);
-    };
+    return () => { window.clearTimeout(timer); window.removeEventListener("keydown", onKey); };
   }, [open]);
-
-  const choose = (nextValue: string) => {
-    onChange(nextValue);
-    setOpen(false);
-    setQuery("");
-  };
-
-  return <div className="field searchable-field"><label>{label}</label><button className="select select-trigger" type="button" onClick={() => setOpen(true)}><span>{selected?.text || "Select"}</span><ChevronRight size={16} /></button>{open && createPortal(
-    <div className="select-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
-      <div className="select-sheet" role="dialog" aria-modal="true" aria-label={label}>
-        <div className="select-sheet-head"><strong>{label}</strong><button className="icon-btn" type="button" aria-label="Close" onClick={() => setOpen(false)}><X size={18} /></button></div>
-        <input ref={searchRef} className="input select-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${label.toLowerCase()}`} />
-        <div className="select-options">
-          <button className={`select-option ${!value ? "active" : ""}`} type="button" onClick={() => choose("")}>Select</button>
-          {filtered.length ? filtered.map((option: any) => <button className={`select-option ${option.value === value ? "active" : ""}`} type="button" key={option.value} onClick={() => choose(option.value)}><span>{option.label}</span>{option.description && <small>{option.description}</small>}</button>) : <div className="select-empty">No results found.</div>}
+  const choose = (nextValue: string) => { onChange(nextValue); setOpen(false); setQuery(""); };
+  return <div className="field">
+    <label>{label}</label>
+    <button className="inp trigger" type="button" onClick={() => setOpen(true)}>{icon && <Ic name={icon} />}<span>{selected?.text || "Select"}</span><span className="chev"><Ic name="chevron" style={{ transform: "rotate(-90deg)" }} /></span></button>
+    {open && createPortal(
+      <div className="select-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
+        <div className="select-sheet" role="dialog" aria-modal="true" aria-label={label}>
+          <div className="select-sheet-head"><strong>{label}</strong><button className="ibtn" type="button" aria-label="Close" onClick={() => setOpen(false)}><Ic name="close" /></button></div>
+          <div className="inp"><Ic name="search" /><input ref={searchRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={`Search ${label.toLowerCase()}`} /></div>
+          <div className="select-options">
+            <button className={`select-option ${!value ? "active" : ""}`} type="button" onClick={() => choose("")}><span>Select</span></button>
+            {filtered.length ? filtered.map((o: any) => <button className={`select-option ${o.value === value ? "active" : ""}`} type="button" key={o.value} onClick={() => choose(o.value)}><span>{o.label}</span>{o.description && <small>{o.description}</small>}</button>) : <div className="select-empty">No results found.</div>}
+          </div>
         </div>
-      </div>
-    </div>,
-    document.body
-  )}</div>;
-}
-
-function Empty({ text }: { text: string }) {
-  return <div className="empty"><XCircle size={20} /><span>{text}</span></div>;
-}
-
-function today() {
-  return new Date().toISOString().slice(0, 10);
+      </div>, document.body)}
+  </div>;
 }
