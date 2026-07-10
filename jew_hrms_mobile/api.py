@@ -1177,6 +1177,39 @@ def reject_leave(name=None, remarks=None):
 
 
 @frappe.whitelist()
+def get_on_leave_today(on_date=None):
+	"""Employees on approved leave for the given day (default today).
+	Admin / HR / Owner only. Used by the mobile Admin dashboard."""
+	_require_admin()
+	day = getdate(on_date or today())
+	rows = frappe.get_all(
+		"Leave Application",
+		filters={"from_date": ["<=", day], "to_date": [">=", day], "docstatus": ["<", 2]},
+		fields=["name", "employee", "employee_name", "leave_type", "from_date", "to_date", "half_day", "status"],
+		order_by="from_date asc",
+		limit_page_length=0,
+		ignore_permissions=True,
+	)
+	result = []
+	for r in rows:
+		approved = str(r.get("status") or "").lower() == "approved"
+		if not approved:
+			approved = str(frappe.db.get_value("Leave Application", r.name, "jew_hrms_approval_status") or "").lower() == "approved"
+		if not approved:
+			continue
+		result.append({
+			"employee": r.employee,
+			"employee_name": r.employee_name or r.employee,
+			"department": frappe.db.get_value("Employee", r.employee, "department"),
+			"leave_type": r.leave_type,
+			"from_date": str(r.from_date),
+			"to_date": str(r.to_date),
+			"half_day": r.half_day,
+		})
+	return _ok({"on_leave": result, "count": len(result), "date": str(day)})
+
+
+@frappe.whitelist()
 def get_notifications():
 	_require_login()
 	employee = _get_employee_for_user()

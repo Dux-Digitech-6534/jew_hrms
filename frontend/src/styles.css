@@ -55,7 +55,7 @@ button,input,select,textarea{font:inherit}button{border:0;background:none;cursor
   padding:calc(var(--safe-top)) 15px 0;border-bottom:1px solid var(--hair);
   background:color-mix(in srgb,var(--surface) 84%,transparent);backdrop-filter:blur(16px)}
 .brand{display:flex;align-items:center;gap:10px;min-width:0;flex:1}
-.mark{width:34px;height:34px;border-radius:10px;flex:0 0 auto;display:grid;place-items:center;
+.mark{width:34px;height:34px;border-radius:10px;flex:0 0 auto;display:grid;place-items:center;color:#fff;
   background:linear-gradient(158deg,#1b2130,#0d1017);box-shadow:var(--inset-hi),0 4px 12px rgba(0,0,0,.18)}
 .mark svg{width:22px;height:22px}
 .brand-t{min-width:0}
@@ -130,7 +130,8 @@ button,input,select,textarea{font:inherit}button{border:0;background:none;cursor
 .inp:focus-within{border-color:var(--iris);box-shadow:0 0 0 3px var(--iris-tint)}
 .inp .chev{margin-left:auto;color:var(--faint)}
 .inp.trigger{cursor:pointer}
-.inp.trigger>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
+.inp.trigger .tval{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
+.inp .chev{margin-left:auto;flex:0 0 auto}
 
 .btn{height:48px;border-radius:14px;display:flex;align-items:center;justify-content:center;gap:8px;width:100%;
   font-size:14px;font-weight:600;color:#fff;letter-spacing:-.01em;
@@ -225,7 +226,7 @@ button,input,select,textarea{font:inherit}button{border:0;background:none;cursor
 
 /* ---- login ---- */
 .login-wrap{min-height:100dvh;display:flex;flex-direction:column;justify-content:center;padding:calc(24px + var(--safe-top)) 22px calc(30px + var(--safe-bottom));overflow-y:auto}
-.login-mark{width:76px;height:76px;border-radius:22px;margin:0 auto 18px;display:grid;place-items:center;background:linear-gradient(158deg,#1b2130,#0d1017);box-shadow:var(--inset-hi),0 12px 30px rgba(0,0,0,.28)}
+.login-mark{width:76px;height:76px;border-radius:22px;margin:0 auto 18px;display:grid;place-items:center;color:#fff;background:linear-gradient(158deg,#1b2130,#0d1017);box-shadow:var(--inset-hi),0 12px 30px rgba(0,0,0,.28)}
 .login-mark svg{width:46px;height:46px}
 .pwtoggle{cursor:pointer;color:var(--faint);flex:0 0 auto}
 

@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { MapContainer, Marker, TileLayer, Circle, useMap, useMapEvents } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { API, call, cleanErrorMessage, logout } from "./api";
-import { IconSprite, Ic } from "./icons";
+import { IconSprite, Ic, BrandMark } from "./icons";
 
 type Caps = {
   can_mark_attendance: boolean;
@@ -88,6 +88,32 @@ function hasActiveFrappeUserCookie() {
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
+
+// Current time in India (IST) regardless of device timezone.
+function istNow() {
+  return new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+}
+function greeting() {
+  const h = istNow().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  if (h < 21) return "Good evening";
+  return "Good night";
+}
+// Display dates as dd/mm/yyyy across the app.
+function fmtDMY(value?: string) {
+  if (!value) return "";
+  const str = String(value);
+  const iso = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
+  const d = new Date(str);
+  if (Number.isNaN(d.getTime())) return str;
+  return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+}
+
+// Primary tab views: show the bottom tab bar (and use tab-height padding).
+// All other views are sub-screens: hide the tab bar + show a back button.
+const TAB_VIEWS: ReadonlySet<View> = new Set<View>(["dashboard", "attendance", "history", "leave", "admin", "profile"]);
 
 const navMeta: Record<View, { title: string; sub: string; nav?: string; back?: boolean }> = {
   dashboard: { title: "JEW HRMS", sub: "Jain Engineering Works", nav: "dashboard" },
@@ -258,7 +284,16 @@ export default function App() {
     }
     if (next === "profile") setProfile((await call(API.getEmployeeProfile)).employee_profile);
     if (next === "notifications") setNotifications((await call(API.getNotifications)).notifications || []);
-    if (next === "admin") setDashboard(await call(API.getDashboard));
+    if (next === "admin") {
+      setDashboard(await call(API.getDashboard));
+      try {
+        const ol = await call(API.getOnLeaveToday);
+        setAdminData((prev: any) => ({ ...prev, onLeave: ol.on_leave || [], onLeaveCount: ol.count ?? (ol.on_leave || []).length }));
+      } catch {
+        // Endpoint may not be live until the bench is restarted; fail soft.
+        setAdminData((prev: any) => ({ ...prev, onLeave: [], onLeaveCount: 0 }));
+      }
+    }
     if (next === "face" && caps.can_register_face) {
       const employees = await call(API.getEmployeeList);
       setAdminData((prev: any) => ({ ...prev, employees: employees.employees }));
@@ -368,7 +403,8 @@ export default function App() {
   }
 
   const meta = navMeta[view];
-  const canBack = viewStack.length > 0 || Boolean(meta.back);
+  const showTabs = TAB_VIEWS.has(view);
+  const canBack = !showTabs || Boolean(meta.back);
 
   return (
     <ErrorBoundary>
@@ -379,7 +415,7 @@ export default function App() {
             ? <button className="back" onClick={goBack} aria-label="Back"><Ic name="chevron" /></button>
             : <button className="ibtn plain" onClick={() => setMenuOpen(true)} aria-label="Menu"><Ic name="menu" style={{ width: 22, height: 22 }} /></button>}
           <div className="brand">
-            <span className="mark"><Ic name="jmark" className="" style={{ width: 22, height: 22 }} /></span>
+            <span className="mark"><BrandMark /></span>
             <span className="brand-t"><strong>{meta.title}</strong><span>{meta.sub}</span></span>
           </div>
           <div className="top-actions">
@@ -389,7 +425,7 @@ export default function App() {
         </header>
 
         <PullToRefresh onRefresh={refreshCurrent} refreshing={refreshing}>
-          <main className={`page ${ADMIN_VIEWS.has(view) || view === "history" || view === "notifications" || view === "settings" ? "noTab" : ""}`}>
+          <main className={`page ${showTabs ? "" : "noTab"}`}>
             {view === "dashboard" && <Dashboard data={dashboard} open={open} caps={caps} flash={flash} session={session} />}
             {view === "attendance" && <Attendance flash={flash} open={open} initialStatus={adminData.attendanceStatus} onCameraActiveChange={setCameraActive} onMarked={async () => { setDashboard(await call(API.getDashboard)); const status = await call(API.getTodayAttendanceStatus); setAdminData((prev: any) => ({ ...prev, attendanceStatus: status })); }} />}
             {view === "history" && <History data={history} />}
@@ -408,13 +444,13 @@ export default function App() {
           </main>
         </PullToRefresh>
 
-        <nav className="tabbar">
+        {showTabs && <nav className="tabbar">
           {navItems.map((item) => (
             <button key={item.id} className={`tab ${meta.nav === item.id ? "on" : ""}`} onClick={() => open(item.view)}>
               <Ic name={item.icon} style={{ width: 22, height: 22 }} /><span>{item.label}</span>
             </button>
           ))}
-        </nav>
+        </nav>}
 
         <MenuDrawer open={menuOpen} caps={caps} active={view} session={session} openView={open} onClose={() => setMenuOpen(false)} onLogout={handleLogout} />
         {toast && <div className="toast-stack"><div className="toast"><Ic name="check" /><div><b>{toast.title}</b><span>{toast.msg}</span></div></div></div>}
@@ -462,7 +498,7 @@ function Login({ onDone, flash }: { onDone: () => void; flash: (title: string, m
   return (
     <div className="shell">
       <div className="login-wrap" onKeyDown={onKey}>
-        <div className="login-mark"><Ic name="jmark" className="" style={{ width: 46, height: 46 }} /></div>
+        <div className="login-mark"><BrandMark /></div>
         <p className="eyebrow" style={{ textAlign: "center" }}>JEWIPL Employee app</p>
         <h1 className="h1" style={{ textAlign: "center" }}>Welcome <span className="g">back</span></h1>
         <p className="sub" style={{ textAlign: "center" }}>Sign in to mark attendance and manage your leave.</p>
@@ -587,8 +623,8 @@ function Dashboard({ data, open, caps, flash, session }: any) {
   const leaveBal = (data?.leave_balance || []).reduce((a: number, b: any) => a + Number(b.unused_leaves || 0), 0);
   return <>
     <p className="eyebrow">Today overview</p>
-    <h1 className="h1">Good morning,<br /><span className="g">{name}</span></h1>
-    <p className="sub"><span className="num">{t.date || today()}</span> · {data?.shift || "General shift"}</p>
+    <h1 className="h1">{greeting()},<br /><span className="g">{name}</span></h1>
+    <p className="sub"><span className="num">{fmtDMY(t.date || today())}</span> · {data?.shift || "General shift"}</p>
 
     <div className="card accent" style={{ marginTop: 15, display: "flex", alignItems: "center", gap: 12 }}>
       <div style={{ flex: 1 }}>
@@ -806,7 +842,7 @@ function History({ data }: any) {
     <div className="sec-lab">Recent checkins</div>
     <div className="card list" style={{ padding: "4px 15px" }}>
       {checkins.length ? checkins.map((row: any) => (
-        <div className="row" key={row.name}><div className="date">{String(row.time).slice(5, 10)}</div><div className="mid"><strong>{row.log_type}</strong><span>{String(row.time).slice(11, 16)}</span></div><Chip kind="ok">Synced</Chip></div>
+        <div className="row" key={row.name}><div className="date" style={{ width: 76 }}>{fmtDMY(row.time)}</div><div className="mid"><strong>{row.log_type}</strong><span>{String(row.time).slice(11, 16)}</span></div><Chip kind="ok">Synced</Chip></div>
       )) : <div className="empty"><h3>No records</h3><p>No attendance records found.</p></div>}
     </div>
   </>;
@@ -855,7 +891,7 @@ function Leave({ data, caps, flash, reload }: any) {
       const kind = statusChipKind(st);
       return <div className="qrow" key={l.name}>
         <div className="qa"><Ic name={kind === "ok" ? "check" : kind === "err" ? "close" : "clock"} /></div>
-        <div className="qt"><strong>{l.leave_type}{l.half_day ? " · Half day" : ""}</strong><span>{l.from_date} → {l.to_date}</span></div>
+        <div className="qt"><strong>{l.leave_type}{l.half_day ? " · Half day" : ""}</strong><span>{fmtDMY(l.from_date)} → {fmtDMY(l.to_date)}</span></div>
         {["Approved", "Rejected", "Cancelled"].includes(st) ? <Chip kind={kind}>{st}</Chip>
           : <button className="btn danger sm" style={{ width: "auto", padding: "0 12px" }} type="button" disabled={isAnyBusy} onClick={() => cancelLeave(l.name)}>{isBusy(`cancel-${l.name}`) ? "…" : "Cancel"}</button>}
       </div>;
@@ -864,12 +900,19 @@ function Leave({ data, caps, flash, reload }: any) {
 }
 
 function Admin({ open, caps, data }: any) {
-  const emp = data?.employee || {};
+  const onLeave = data?.onLeave || [];
+  const onLeaveCount = data?.onLeaveCount ?? onLeave.length;
   return <>
-    <div className="grid2">
-      <Stat icon="users" label="Employees" value={<span style={{ fontSize: 20 }}>—</span>} ink />
-      <Stat icon="clock" label="My status" value={<span style={{ fontSize: 17 }}>{data?.today?.status || "—"}</span>} />
-    </div>
+    <div className="sec-lab">On leave today <span className="num" style={{ color: "var(--faint)" }}>{onLeaveCount}</span></div>
+    {onLeave.length ? <div className="list card" style={{ padding: "4px 15px" }}>
+      {onLeave.map((e: any, i: number) => (
+        <div className="row" key={e.employee || i}>
+          <div className="qa" style={{ width: 36, height: 36, borderRadius: 11, background: "var(--pend-bg)", color: "var(--pend)", display: "grid", placeItems: "center", fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: 12, flex: "0 0 auto" }}>{empInitials(e.employee_name)}</div>
+          <div className="mid"><strong>{e.employee_name}</strong><span>{[e.department, e.leave_type].filter(Boolean).join(" · ")}{e.half_day ? " · ½ day" : ""}</span></div>
+          <Chip kind="pend">{fmtDMY(e.from_date)}{e.to_date && e.to_date !== e.from_date ? ` – ${fmtDMY(e.to_date)}` : ""}</Chip>
+        </div>
+      ))}
+    </div> : <div className="empty"><h3>Nobody on leave</h3><p>No approved leave for today.</p></div>}
     <div className="sec-lab">Admin modules</div>
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {caps.can_approve_leave && <Mod icon="check" title="Leave approval" sub="Approve or reject requests" onClick={() => open("leaveApproval")} />}
@@ -1107,7 +1150,7 @@ function Regularization({ items, flash, reload }: any) {
   return <>
     {items.length ? items.map((r: any) => (
       <div className="card" style={{ marginBottom: 11 }} key={r.name}>
-        <div style={{ display: "flex", alignItems: "center", gap: 11 }}><div className="qa" style={{ width: 38, height: 38, borderRadius: 11, background: "var(--iris-tint)", color: "var(--iris)", display: "grid", placeItems: "center" }}><Ic name="refresh" style={{ width: 17, height: 17 }} /></div><div style={{ flex: 1, minWidth: 0 }}><strong style={{ fontSize: 13 }}>{r.employee}</strong><div style={{ fontSize: 11, color: "var(--faint)" }}>{r.attendance_date} · {r.issue_type} · {r.policy_action || "Review"}</div></div></div>
+        <div style={{ display: "flex", alignItems: "center", gap: 11 }}><div className="qa" style={{ width: 38, height: 38, borderRadius: 11, background: "var(--iris-tint)", color: "var(--iris)", display: "grid", placeItems: "center" }}><Ic name="refresh" style={{ width: 17, height: 17 }} /></div><div style={{ flex: 1, minWidth: 0 }}><strong style={{ fontSize: 13 }}>{r.employee}</strong><div style={{ fontSize: 11, color: "var(--faint)" }}>{fmtDMY(r.attendance_date)} · {r.issue_type} · {r.policy_action || "Review"}</div></div></div>
         <div style={{ display: "flex", gap: 9, marginTop: 12 }}>
           <button className="btn ok sm" style={{ flex: 1 }} type="button" disabled={isAnyBusy} onClick={() => decide(r.name, "Approved as Present")}>{isBusy(`Approved as Present-${r.name}`) ? "…" : "Present"}</button>
           <button className="btn ghost sm" style={{ flex: 1 }} type="button" disabled={isAnyBusy} onClick={() => decide(r.name, "Marked Half Day")}>Half day</button>
@@ -1132,7 +1175,7 @@ function LeaveApproval({ leaves, flash, reload }: any) {
       return <div className="card" style={{ marginBottom: 11 }} key={l.name}>
         <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
           <div className="qa" style={{ width: 38, height: 38, borderRadius: 11, background: "var(--iris-tint)", color: "var(--iris)", display: "grid", placeItems: "center", fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: 13 }}>{empInitials(nm)}</div>
-          <div style={{ flex: 1, minWidth: 0 }}><strong style={{ fontSize: 13 }}>{nm}</strong><div style={{ fontSize: 11, color: "var(--faint)" }}>{l.leave_type} · <span className="num cy">{l.from_date} → {l.to_date}</span>{l.half_day ? " · Half day" : ""}</div></div>
+          <div style={{ flex: 1, minWidth: 0 }}><strong style={{ fontSize: 13 }}>{nm}</strong><div style={{ fontSize: 11, color: "var(--faint)" }}>{l.leave_type} · <span className="num cy">{fmtDMY(l.from_date)} → {fmtDMY(l.to_date)}</span>{l.half_day ? " · Half day" : ""}</div></div>
           <Chip kind="pend">{st}</Chip>
         </div>
         <div style={{ display: "flex", gap: 9, marginTop: 12 }}>
@@ -1246,7 +1289,7 @@ function Select({ label, value, onChange, options, icon }: any) {
   const choose = (nextValue: string) => { onChange(nextValue); setOpen(false); setQuery(""); };
   return <div className="field">
     <label>{label}</label>
-    <button className="inp trigger" type="button" onClick={() => setOpen(true)}>{icon && <Ic name={icon} />}<span>{selected?.text || "Select"}</span><span className="chev"><Ic name="chevron" style={{ transform: "rotate(-90deg)" }} /></span></button>
+    <button className="inp trigger" type="button" onClick={() => setOpen(true)}>{icon && <Ic name={icon} />}<span className="tval">{selected?.label || "Select"}</span><span className="chev"><Ic name="chevron" style={{ transform: "rotate(-90deg)" }} /></span></button>
     {open && createPortal(
       <div className="select-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
         <div className="select-sheet" role="dialog" aria-modal="true" aria-label={label}>

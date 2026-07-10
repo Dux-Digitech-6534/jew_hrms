@@ -43,6 +43,23 @@ export function IconSprite() {
   );
 }
 
+// JEW brand mark (from jew-mark.svg) — J curve in currentColor + cyan sparks.
+// Rendered inside the dark .mark / .login-mark tile (currentColor = white).
+export function BrandMark() {
+  return (
+    <svg viewBox="0 0 512 512" aria-hidden="true">
+      <defs>
+        <linearGradient id="jewSpark" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#0CB4A0" /><stop offset="1" stopColor="#0E9C8B" />
+        </linearGradient>
+      </defs>
+      <path d="M330 118 V296 a94 94 0 0 1 -158 69" fill="none" stroke="currentColor" strokeWidth={46} strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M156 120 l24 66 66 24 -66 24 -24 66 -24 -66 -66 -24 66 -24 z" fill="url(#jewSpark)" />
+      <path d="M360 340 l13 34 34 13 -34 13 -13 34 -13 -34 -34 -13 34 -13 z" fill="url(#jewSpark)" opacity="0.9" />
+    </svg>
+  );
+}
+
 export function Ic({ name, style, className = "ic" }: { name: string; style?: CSSProperties; className?: string }) {
   return (
     <svg className={className} style={style} viewBox="0 0 24 24" aria-hidden="true">

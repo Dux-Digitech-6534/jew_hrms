@@ -22,6 +22,7 @@ export const API = {
   getMyLeaves: "jew_hrms_mobile.api.get_my_leaves",
   cancelLeave: "jew_hrms_mobile.api.cancel_leave",
   getPendingLeaves: "jew_hrms_mobile.api.get_pending_leaves",
+  getOnLeaveToday: "jew_hrms_mobile.api.get_on_leave_today",
   approveLeave: "jew_hrms_mobile.api.approve_leave",
   rejectLeave: "jew_hrms_mobile.api.reject_leave",
   getNotifications: "jew_hrms_mobile.api.get_notifications",
