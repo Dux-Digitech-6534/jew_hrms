@@ -111,6 +111,20 @@ function fmtDMY(value?: string) {
   return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
 }
 
+// Collapse options that share a display label (the site has duplicate leave
+// types like "CL" and "Casual Leave" both showing as "Casual Leave").
+function dedupeByLabel(options: any[]) {
+  const seen = new Set<string>();
+  const out: any[] = [];
+  for (const o of options) {
+    const key = String(o.label ?? o.value ?? "").trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(o);
+  }
+  return out;
+}
+
 // Primary tab views: show the bottom tab bar (and use tab-height padding).
 // All other views are sub-screens: hide the tab bar + show a back button.
 const TAB_VIEWS: ReadonlySet<View> = new Set<View>(["dashboard", "attendance", "history", "leave", "admin", "profile"]);
@@ -872,7 +886,7 @@ function Leave({ data, caps, flash, reload }: any) {
     {balances.length > 0 && <div className="grid2">{balances.slice(0, 2).map((b: any, i: number) => <Stat key={i} label={b.leave_type} value={Number(b.unused_leaves ?? b.total_leaves_allocated ?? 0)} small={b.total_leaves_allocated ? `/${b.total_leaves_allocated}` : ""} />)}</div>}
     <div className="card" style={{ marginTop: balances.length ? 12 : 0 }}>
       {canSelectEmployee && <Select label="Employee" value={form.employee} onChange={(v: string) => setForm({ ...form, employee: v })} options={(data.employees || []).map((e: any) => ({ value: e.name, label: e.employee_name || e.name, description: e.description || e.name }))} />}
-      <Select label="Leave type" value={form.leave_type} onChange={(v: string) => setForm({ ...form, leave_type: v })} options={(data.types || []).map((t: any) => ({ value: t.name, label: t.leave_type_name || t.name }))} />
+      <Select label="Leave type" value={form.leave_type} onChange={(v: string) => setForm({ ...form, leave_type: v })} options={dedupeByLabel((data.types || []).map((t: any) => ({ value: t.name, label: t.leave_type_name || t.name })))} />
       <div className="grid2" style={{ marginTop: 13 }}>
         <Field label="From" icon="calendar" type="date" value={form.from_date} onChange={(v: string) => setForm({ ...form, from_date: v })} />
         <Field label="To" icon="calendar" type="date" value={form.to_date} onChange={(v: string) => setForm({ ...form, to_date: v })} />

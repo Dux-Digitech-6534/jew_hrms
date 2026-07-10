@@ -129,8 +129,8 @@ button,input,select,textarea{font:inherit}button{border:0;background:none;cursor
 .inp input::placeholder,.inp textarea::placeholder{color:var(--faint)}
 .inp:focus-within{border-color:var(--iris);box-shadow:0 0 0 3px var(--iris-tint)}
 .inp .chev{margin-left:auto;color:var(--faint)}
-.inp.trigger{cursor:pointer}
-.inp.trigger .tval{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
+.inp.trigger{cursor:pointer;overflow:hidden}
+.inp.trigger .tval{flex:1 1 auto;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
 .inp .chev{margin-left:auto;flex:0 0 auto}
 
 .btn{height:48px;border-radius:14px;display:flex;align-items:center;justify-content:center;gap:8px;width:100%;
