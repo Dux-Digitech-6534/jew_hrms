@@ -1209,6 +1209,51 @@ def get_on_leave_today(on_date=None):
 	return _ok({"on_leave": result, "count": len(result), "date": str(day)})
 
 
+# HR categorises a whole leave as CL / PL / LWP in one click. Re-books the
+# Leave Application under the chosen paid type (deducting that balance), or
+# leaves it unpaid for LWP. Admin/HR/Owner only.
+LEAVE_CATEGORY_MAP = {
+	"CL": "Casual Leave", "Casual Leave": "Casual Leave",
+	"PL": "Privilege Leave", "Privilege Leave": "Privilege Leave",
+	"LWP": "Leave Without Pay", "Leave Without Pay": "Leave Without Pay",
+}
+
+
+@frappe.whitelist()
+def categorise_leave(leave=None, category=None):
+	_require_admin()
+	if not leave or not category:
+		return _fail("Leave and category are required.", "validation_error")
+	target = LEAVE_CATEGORY_MAP.get(str(category).strip())
+	if not target or not frappe.db.exists("Leave Type", target):
+		return _fail("Unknown or missing leave type for this category.", "validation_error")
+	src = frappe.get_doc("Leave Application", leave)
+	if src.leave_type == target:
+		return _ok({"leave_application": src.name, "leave_type": target}, f"Already marked as {target}.")
+	payload = {
+		"employee": src.employee, "leave_type": target,
+		"from_date": src.from_date, "to_date": src.to_date,
+		"half_day": src.half_day, "half_day_date": src.get("half_day_date"),
+		"description": src.description,
+	}
+	try:
+		if src.docstatus == 1:
+			src.cancel()
+		elif src.docstatus == 0:
+			frappe.delete_doc("Leave Application", src.name, ignore_permissions=True)
+		new = frappe.new_doc("Leave Application")
+		new.update({k: v for k, v in payload.items() if v not in (None, "")})
+		new.status = "Approved"
+		_set_if_has(new, "jew_hrms_approval_status", APPROVAL_STATUSES["approved"])
+		new.insert(ignore_permissions=True)
+		new.submit()
+		frappe.db.commit()
+	except Exception:
+		frappe.db.rollback()
+		return _fail(f"Could not mark as {target}. The employee may not have enough {target} balance.", "categorise_failed")
+	return _ok({"leave_application": new.name, "leave_type": target}, f"Leave marked as {target}.")
+
+
 @frappe.whitelist()
 def get_notifications():
 	_require_login()
