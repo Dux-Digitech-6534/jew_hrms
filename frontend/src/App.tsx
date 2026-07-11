@@ -130,6 +130,11 @@ function dedupeByLabel(options: any[]) {
 // shows once. Consolidating these in Frappe is the proper long-term fix.
 const HIDDEN_LEAVE_TYPES = new Set(["CL", "SL", "PL", "LWP"]);
 
+// Leave type(s) an employee can pick when applying. "Leave Request" is an
+// unlimited (no-allocation) type; HR categorises it against CL/PL in the back
+// office. CL/PL themselves are HR buckets — not employee-selectable.
+const EMPLOYEE_LEAVE_TYPES = new Set(["Leave Request"]);
+
 // Primary tab views: show the bottom tab bar (and use tab-height padding).
 // All other views are sub-screens: hide the tab bar + show a back button.
 const TAB_VIEWS: ReadonlySet<View> = new Set<View>(["dashboard", "attendance", "history", "leave", "admin", "profile"]);
@@ -868,7 +873,7 @@ function History({ data }: any) {
 }
 
 function Leave({ data, caps, flash, reload }: any) {
-  const [form, setForm] = useState({ employee: "", leave_type: "", from_date: "", to_date: "", reason: "", half_day: false, half_day_date: "", half_day_type: "First Half" });
+  const [form, setForm] = useState({ employee: "", leave_type: "Leave Request", from_date: "", to_date: "", reason: "", half_day: false, half_day_date: "", half_day_type: "First Half" });
   const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
   const canSelectEmployee = Boolean(caps?.can_view_admin);
   const submit = async () => {
@@ -881,7 +886,7 @@ function Leave({ data, caps, flash, reload }: any) {
       await reload();
       return response;
     }, { successTitle: "Leave submitted", errorTitle: "Leave failed" });
-    if (result) setForm({ employee: "", leave_type: "", from_date: "", to_date: "", reason: "", half_day: false, half_day_date: "", half_day_type: "First Half" });
+    if (result) setForm({ employee: "", leave_type: "Leave Request", from_date: "", to_date: "", reason: "", half_day: false, half_day_date: "", half_day_type: "First Half" });
   };
   const cancelLeave = async (name: string) => {
     await runAction(`cancel-${name}`, async () => { await call(API.cancelLeave, { name }); reload(); }, { successTitle: "Leave cancelled", successMessage: "Leave request updated.", errorTitle: "Cancel failed" });
@@ -891,7 +896,7 @@ function Leave({ data, caps, flash, reload }: any) {
     {balances.length > 0 && <div className="grid2">{dedupeByLabel(balances.filter((b: any) => !HIDDEN_LEAVE_TYPES.has(b.leave_type)).map((b: any) => ({ ...b, label: b.leave_type }))).slice(0, 2).map((b: any, i: number) => <Stat key={i} label={b.leave_type} value={Number(b.total_leaves_allocated ?? 0)} small=" days" />)}</div>}
     <div className="card" style={{ marginTop: balances.length ? 12 : 0 }}>
       {canSelectEmployee && <Select label="Employee" value={form.employee} onChange={(v: string) => setForm({ ...form, employee: v })} options={(data.employees || []).map((e: any) => ({ value: e.name, label: e.employee_name || e.name, description: e.description || e.name }))} />}
-      <Select label="Leave type" value={form.leave_type} onChange={(v: string) => setForm({ ...form, leave_type: v })} options={dedupeByLabel((data.types || []).filter((t: any) => !HIDDEN_LEAVE_TYPES.has(t.name)).map((t: any) => ({ value: t.name, label: t.leave_type_name || t.name })))} />
+      <Select label="Leave type" value={form.leave_type} onChange={(v: string) => setForm({ ...form, leave_type: v })} options={(data.types || []).filter((t: any) => EMPLOYEE_LEAVE_TYPES.has(t.name)).map((t: any) => ({ value: t.name, label: t.leave_type_name || t.name }))} />
       <div className="grid2" style={{ marginTop: 13 }}>
         <Field label="From" icon="calendar" type="date" value={form.from_date} onChange={(v: string) => setForm({ ...form, from_date: v })} />
         <Field label="To" icon="calendar" type="date" value={form.to_date} onChange={(v: string) => setForm({ ...form, to_date: v })} />
