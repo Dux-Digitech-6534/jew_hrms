@@ -453,7 +453,7 @@ export default function App() {
             {view === "dashboard" && <Dashboard data={dashboard} open={open} caps={caps} flash={flash} session={session} />}
             {view === "attendance" && <Attendance flash={flash} open={open} initialStatus={adminData.attendanceStatus} onCameraActiveChange={setCameraActive} onMarked={async () => { setDashboard(await call(API.getDashboard)); const status = await call(API.getTodayAttendanceStatus); setAdminData((prev: any) => ({ ...prev, attendanceStatus: status })); }} />}
             {view === "history" && <History data={history} />}
-            {view === "leave" && <Leave data={leaveData} caps={caps} flash={flash} reload={() => open("leave")} />}
+            {view === "leave" && <Leave data={leaveData} caps={caps} flash={flash} me={session?.employee} reload={() => open("leave")} />}
             {view === "admin" && (caps.can_view_admin ? <Admin open={open} caps={caps} data={adminData} /> : <NotPermitted />)}
             {view === "face" && (caps.can_view_admin && caps.can_register_face ? <FaceAdmin employees={adminData.employees || []} flash={flash} selectedEmployee={selectedEmployee} onCameraActiveChange={setCameraActive} /> : <NotPermitted />)}
             {view === "location" && (caps.can_view_admin && caps.can_manage_locations ? <LocationAdmin data={adminData} setData={setAdminData} flash={flash} reload={() => open("location")} /> : <NotPermitted />)}
@@ -872,10 +872,15 @@ function History({ data }: any) {
   </>;
 }
 
-function Leave({ data, caps, flash, reload }: any) {
+function Leave({ data, caps, flash, reload, me }: any) {
   const [form, setForm] = useState({ employee: "", leave_type: "Leave Request", from_date: "", to_date: "", reason: "", half_day: false, half_day_date: "", half_day_type: "First Half" });
   const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
   const canSelectEmployee = Boolean(caps?.can_view_admin);
+  // Default the employee to the logged-in user. Admins can change it; a plain
+  // employee sees their own (fixed) and the payload always resolves to them.
+  useEffect(() => {
+    if (me?.employee) setForm((f: any) => (f.employee ? f : { ...f, employee: me.employee }));
+  }, [me?.employee]);
   const submit = async () => {
     if (!form.leave_type || !form.from_date || !form.to_date) { flash("Required fields", "Leave Type, From Date and To Date are required."); return; }
     if (form.from_date > form.to_date) { flash("Invalid dates", "From Date cannot be after To Date."); return; }
@@ -886,7 +891,7 @@ function Leave({ data, caps, flash, reload }: any) {
       await reload();
       return response;
     }, { successTitle: "Leave submitted", errorTitle: "Leave failed" });
-    if (result) setForm({ employee: "", leave_type: "Leave Request", from_date: "", to_date: "", reason: "", half_day: false, half_day_date: "", half_day_type: "First Half" });
+    if (result) setForm({ employee: me?.employee || "", leave_type: "Leave Request", from_date: "", to_date: "", reason: "", half_day: false, half_day_date: "", half_day_type: "First Half" });
   };
   const cancelLeave = async (name: string) => {
     await runAction(`cancel-${name}`, async () => { await call(API.cancelLeave, { name }); reload(); }, { successTitle: "Leave cancelled", successMessage: "Leave request updated.", errorTitle: "Cancel failed" });
@@ -895,7 +900,9 @@ function Leave({ data, caps, flash, reload }: any) {
   return <>
     {balances.length > 0 && <div className="grid2">{dedupeByLabel(balances.filter((b: any) => !HIDDEN_LEAVE_TYPES.has(b.leave_type)).map((b: any) => ({ ...b, label: b.leave_type }))).slice(0, 2).map((b: any, i: number) => <Stat key={i} label={b.leave_type} value={Number(b.total_leaves_allocated ?? 0)} small=" days" />)}</div>}
     <div className="card" style={{ marginTop: balances.length ? 12 : 0 }}>
-      {canSelectEmployee && <Select label="Employee" value={form.employee} onChange={(v: string) => setForm({ ...form, employee: v })} options={(data.employees || []).map((e: any) => ({ value: e.name, label: e.employee_name || e.name, description: e.description || e.name }))} />}
+      {canSelectEmployee
+        ? <Select label="Employee" value={form.employee} onChange={(v: string) => setForm({ ...form, employee: v })} options={(data.employees || []).map((e: any) => ({ value: e.name, label: e.employee_name || e.name, description: e.description || e.name }))} />
+        : <div className="field"><label>Employee</label><div className="inp" style={{ opacity: 0.9 }}><Ic name="user" /><span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{me?.employee_name || me?.employee || "You"}</span></div></div>}
       <Select label="Leave type" value={form.leave_type} onChange={(v: string) => setForm({ ...form, leave_type: v })} options={(data.types || []).filter((t: any) => EMPLOYEE_LEAVE_TYPES.has(t.name)).map((t: any) => ({ value: t.name, label: t.leave_type_name || t.name }))} />
       <div className="grid2" style={{ marginTop: 13 }}>
         <Field label="From" icon="calendar" type="date" value={form.from_date} onChange={(v: string) => setForm({ ...form, from_date: v })} />
