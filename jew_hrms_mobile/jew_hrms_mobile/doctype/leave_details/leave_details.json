@@ -5,7 +5,7 @@
  "creation": "2026-07-11 00:00:00.000000",
  "doctype": "DocType",
  "engine": "InnoDB",
- "field_order": ["details_section", "company", "employee", "column_break_1", "month", "year", "balances_section", "allotted_cl", "remaining_cl", "column_break_2", "allotted_pl", "remaining_pl", "leaves_section", "leaves", "amended_from"],
+ "field_order": ["details_section", "company", "employee", "column_break_1", "month", "year", "balances_section", "allotted_cl", "remaining_cl", "column_break_2", "allotted_pl", "remaining_pl", "leaves_section", "leaves", "summary_section", "cl_days", "pl_days", "column_break_3", "lwp_days", "amended_from"],
  "fields": [
   {"fieldname": "details_section", "fieldtype": "Section Break", "label": "Details"},
   {"fieldname": "company", "label": "Company", "fieldtype": "Link", "options": "Company", "reqd": 1, "in_list_view": 1},
@@ -21,6 +21,11 @@
   {"fieldname": "remaining_pl", "label": "Remaining PL", "fieldtype": "Float", "read_only": 1},
   {"fieldname": "leaves_section", "fieldtype": "Section Break", "label": "Leave Days"},
   {"fieldname": "leaves", "label": "Leaves", "fieldtype": "Table", "options": "Leave Details Item"},
+  {"fieldname": "summary_section", "fieldtype": "Section Break", "label": "Summary (set on submit)"},
+  {"fieldname": "cl_days", "label": "CL Days", "fieldtype": "Float", "read_only": 1, "description": "Casual Leave days deducted from balance."},
+  {"fieldname": "pl_days", "label": "PL Days", "fieldtype": "Float", "read_only": 1, "description": "Privilege Leave days deducted from balance."},
+  {"fieldname": "column_break_3", "fieldtype": "Column Break"},
+  {"fieldname": "lwp_days", "label": "LWP Days (deduct salary)", "fieldtype": "Float", "read_only": 1, "description": "Unpaid days — deduct these from salary."},
   {"fieldname": "amended_from", "label": "Amended From", "fieldtype": "Link", "options": "Leave Details", "no_copy": 1, "print_hide": 1, "read_only": 1}
  ],
  "index_web_pages_for_search": 0,

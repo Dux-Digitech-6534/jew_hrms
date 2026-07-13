@@ -8,8 +8,14 @@ from frappe.utils import add_days, cint, flt, getdate
 # Canonical leave types on this bench (full names; short codes CL/PL/SL are stale duplicates).
 CL_TYPE = "Casual Leave"
 PL_TYPE = "Privilege Leave"
-# The employee-applied unpaid type that already books the whole leave as LWP.
-LWP_BASELINE_TYPE = "Leave Request"
+
+# Ledger transaction_type used for the deduction rows.
+# HRMS `get_leaves_for_period` only counts consumption from three transaction types;
+# of those, "Leave Encashment" is the only one that trusts the raw `leaves` value verbatim
+# (the "Leave Application" branch recomputes days from the date range instead). Using it
+# means a -1 / -0.5 entry reduces the balance by exactly that amount, half-days included.
+# transaction_name carries this doc's name purely as a reversal marker.
+TXN_TYPE = "Leave Encashment"
 
 ALLOWED_ROLES = {"JEW HRMS Admin", "JEW HRMS HR", "JEW HRMS Owner"}
 MONTHS = ["January", "February", "March", "April", "May", "June",
@@ -50,13 +56,14 @@ def _make_lle(doc, on_date, leave_type, leaves, is_lwp=0):
 	lle.employee = doc.employee
 	lle.employee_name = frappe.db.get_value("Employee", doc.employee, "employee_name")
 	lle.leave_type = leave_type
-	lle.transaction_type = "Leave Details"
+	lle.transaction_type = TXN_TYPE
 	lle.transaction_name = doc.name
 	lle.company = doc.company
 	lle.leaves = leaves
 	lle.from_date = on_date
 	lle.to_date = on_date
 	lle.is_lwp = cint(is_lwp)
+	lle.flags.ignore_links = True  # transaction_name points at this Leave Details, not a real Leave Encashment
 	lle.insert(ignore_permissions=True)
 	lle.submit()
 	return lle.name
@@ -76,32 +83,39 @@ class LeaveDetails(Document):
 		_require_roles()
 		# idempotency guard: never create ledger entries twice for this doc
 		if frappe.get_all("Leave Ledger Entry",
-		                  filters={"transaction_type": "Leave Details", "transaction_name": self.name, "docstatus": 1},
+		                  filters={"transaction_type": TXN_TYPE, "transaction_name": self.name, "docstatus": 1},
 		                  limit=1):
 			return
 		_, end = _month_bounds(self.month, self.year)
 		need_cl = sum((0.5 if cint(r.half_day) else 1) for r in self.leaves if cint(r.cl))
 		need_pl = sum((0.5 if cint(r.half_day) else 1) for r in self.leaves if cint(r.pl))
+		need_lwp = sum((0.5 if cint(r.half_day) else 1) for r in self.leaves if cint(r.lwp))
 		if need_cl and _balance(self.employee, CL_TYPE, end) < need_cl:
 			frappe.throw(_("Not enough Casual Leave balance: {0} day(s) needed, {1} available.").format(need_cl, _balance(self.employee, CL_TYPE, end)))
 		if need_pl and _balance(self.employee, PL_TYPE, end) < need_pl:
 			frappe.throw(_("Not enough Privilege Leave balance: {0} day(s) needed, {1} available.").format(need_pl, _balance(self.employee, PL_TYPE, end)))
+		# Consume CL / PL from the balance (delta = one negative ledger entry per day).
+		# LWP days are NOT ledgered here — they stay unpaid via the original Leave Request
+		# and are surfaced as `lwp_days` below for the manual salary deduction.
 		for r in self.leaves:
 			qty = 0.5 if cint(r.half_day) else 1
 			if cint(r.cl):
 				_make_lle(self, r.date, CL_TYPE, -qty, is_lwp=0)
-				_make_lle(self, r.date, LWP_BASELINE_TYPE, qty, is_lwp=1)   # remove this day from the LWP tally
 			elif cint(r.pl):
 				_make_lle(self, r.date, PL_TYPE, -qty, is_lwp=0)
-				_make_lle(self, r.date, LWP_BASELINE_TYPE, qty, is_lwp=1)
-			# lwp: no entry — the day stays unpaid via the original Leave Request
+		self.db_set("cl_days", need_cl, update_modified=False)
+		self.db_set("pl_days", need_pl, update_modified=False)
+		self.db_set("lwp_days", need_lwp, update_modified=False)
 
 	def on_cancel(self):
 		_require_roles()
-		for name in frappe.get_all("Leave Ledger Entry",
-		                           filters={"transaction_type": "Leave Details", "transaction_name": self.name, "docstatus": 1},
-		                           pluck="name"):
-			frappe.get_doc("Leave Ledger Entry", name).cancel()
+		# Reverse the deduction: drop every ledger entry this doc created so the
+		# CL/PL balance recomputes to its pre-submit value.
+		frappe.db.delete("Leave Ledger Entry",
+		                 {"transaction_type": TXN_TYPE, "transaction_name": self.name})
+		self.db_set("cl_days", 0, update_modified=False)
+		self.db_set("pl_days", 0, update_modified=False)
+		self.db_set("lwp_days", 0, update_modified=False)
 
 
 @frappe.whitelist()
