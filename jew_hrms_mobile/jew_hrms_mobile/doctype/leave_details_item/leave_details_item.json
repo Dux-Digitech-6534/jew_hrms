@@ -1,0 +1,27 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-07-11 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": ["date", "leave_application", "leave_type", "half_day", "pl", "cl", "lwp"],
+ "fields": [
+  {"fieldname": "date", "label": "Date", "fieldtype": "Date", "read_only": 1, "in_list_view": 1, "columns": 2},
+  {"fieldname": "leave_application", "label": "Leave Application", "fieldtype": "Link", "options": "Leave Application", "read_only": 1, "in_list_view": 1, "columns": 3},
+  {"fieldname": "leave_type", "label": "Applied Type", "fieldtype": "Data", "read_only": 1, "in_list_view": 1, "columns": 2},
+  {"fieldname": "half_day", "label": "Half Day", "fieldtype": "Check", "read_only": 1, "in_list_view": 1, "columns": 1},
+  {"fieldname": "pl", "label": "PL", "fieldtype": "Check", "in_list_view": 1, "columns": 1},
+  {"fieldname": "cl", "label": "CL", "fieldtype": "Check", "in_list_view": 1, "columns": 1},
+  {"fieldname": "lwp", "label": "LWP", "fieldtype": "Check", "in_list_view": 1, "columns": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "module": "JEW HRMS Mobile",
+ "name": "Leave Details Item",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

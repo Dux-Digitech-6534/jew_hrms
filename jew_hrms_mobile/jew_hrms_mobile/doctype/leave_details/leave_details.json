@@ -1,0 +1,41 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "HR-LD-.YYYY.-.#####",
+ "creation": "2026-07-11 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["details_section", "company", "employee", "column_break_1", "month", "year", "balances_section", "allotted_cl", "remaining_cl", "column_break_2", "allotted_pl", "remaining_pl", "leaves_section", "leaves", "amended_from"],
+ "fields": [
+  {"fieldname": "details_section", "fieldtype": "Section Break", "label": "Details"},
+  {"fieldname": "company", "label": "Company", "fieldtype": "Link", "options": "Company", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "employee", "label": "Employee", "fieldtype": "Link", "options": "Employee", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "column_break_1", "fieldtype": "Column Break"},
+  {"fieldname": "month", "label": "Month", "fieldtype": "Select", "options": "January\nFebruary\nMarch\nApril\nMay\nJune\nJuly\nAugust\nSeptember\nOctober\nNovember\nDecember", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "year", "label": "Year", "fieldtype": "Int", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "balances_section", "fieldtype": "Section Break", "label": "Leave Balance"},
+  {"fieldname": "allotted_cl", "label": "Allotted CL", "fieldtype": "Float", "read_only": 1},
+  {"fieldname": "remaining_cl", "label": "Remaining CL", "fieldtype": "Float", "read_only": 1},
+  {"fieldname": "column_break_2", "fieldtype": "Column Break"},
+  {"fieldname": "allotted_pl", "label": "Allotted PL", "fieldtype": "Float", "read_only": 1},
+  {"fieldname": "remaining_pl", "label": "Remaining PL", "fieldtype": "Float", "read_only": 1},
+  {"fieldname": "leaves_section", "fieldtype": "Section Break", "label": "Leave Days"},
+  {"fieldname": "leaves", "label": "Leaves", "fieldtype": "Table", "options": "Leave Details Item"},
+  {"fieldname": "amended_from", "label": "Amended From", "fieldtype": "Link", "options": "Leave Details", "no_copy": 1, "print_hide": 1, "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "is_submittable": 1,
+ "links": [],
+ "module": "JEW HRMS Mobile",
+ "name": "Leave Details",
+ "permissions": [
+  {"role": "JEW HRMS Admin", "read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 1, "delete": 1, "report": 1, "print": 1, "email": 1, "share": 1},
+  {"role": "JEW HRMS HR", "read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 1, "delete": 1, "report": 1, "print": 1, "email": 1, "share": 1},
+  {"role": "JEW HRMS Owner", "read": 1, "write": 1, "create": 1, "submit": 1, "cancel": 1, "amend": 1, "delete": 1, "report": 1, "print": 1, "email": 1, "share": 1}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1,
+ "title_field": "employee"
+}
