@@ -882,9 +882,13 @@ function Leave({ data, caps, flash, reload, me }: any) {
     if (me?.employee) setForm((f: any) => (f.employee ? f : { ...f, employee: me.employee }));
   }, [me?.employee]);
   const submit = async () => {
-    if (!form.leave_type || !form.from_date || !form.to_date) { flash("Required fields", "Leave Type, From Date and To Date are required."); return; }
+    const missing: string[] = [];
+    if (!form.leave_type) missing.push("Leave type");
+    if (!form.from_date) missing.push("From date");
+    if (!form.to_date) missing.push("To date");
+    if (form.half_day && !form.half_day_date) missing.push("Half day date");
+    if (missing.length) { flash("Required fields", `${missing.join(", ")} ${missing.length > 1 ? "are" : "is"} required.`); return; }
     if (form.from_date > form.to_date) { flash("Invalid dates", "From Date cannot be after To Date."); return; }
-    if (form.half_day && !form.half_day_date) { flash("Required fields", "Half Day Date is required."); return; }
     const result = await runAction("submit-leave", async () => {
       const payload = canSelectEmployee ? form : { ...form, employee: undefined };
       const response = await call(API.applyLeave, payload);
