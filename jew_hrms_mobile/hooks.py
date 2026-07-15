@@ -150,23 +150,13 @@ website_route_rules = [
 # Scheduled Tasks
 # ---------------
 
-# scheduler_events = {
-# 	"all": [
-# 		"jew_hrms_mobile.tasks.all"
-# 	],
-# 	"daily": [
-# 		"jew_hrms_mobile.tasks.daily"
-# 	],
-# 	"hourly": [
-# 		"jew_hrms_mobile.tasks.hourly"
-# 	],
-# 	"weekly": [
-# 		"jew_hrms_mobile.tasks.weekly"
-# 	],
-# 	"monthly": [
-# 		"jew_hrms_mobile.tasks.monthly"
-# 	],
-# }
+scheduler_events = {
+	"daily": [
+		# Reconcile past days that have check-ins but no Attendance:
+		# IN+OUT -> policy status (safety net); IN-only -> Present + Missing Mark Out regularization.
+		"jew_hrms_mobile.api.process_missing_attendance"
+	],
+}
 
 # Testing
 # -------

@@ -617,6 +617,69 @@ def _ensure_attendance(employee, attendance_date, in_time=None, out_time=None, p
 		return {"skipped": "not_marked", "reason": str(exc)[:140]}
 
 
+def process_missing_attendance(days_back=30):
+	"""Daily reconciliation of past days that have check-ins but no Attendance.
+
+	- IN + OUT  -> mark per the shift policy (safety net if the inline check-out mark was missed).
+	- IN only   -> mark Present + raise a 'Missing Mark Out' regularization for HR
+	               (employee was verified on-site at check-in; HR can adjust if needed).
+
+	Idempotent (days already marked are skipped) and never touches today (its
+	check-out may still arrive). Scheduled via hooks `daily`; also safe to run manually."""
+	today_d = getdate(today())
+	window_start = add_to_date(today_d, days=-int(days_back or 30))
+	checkins = frappe.get_all(
+		"Employee Checkin",
+		filters={"time": [">=", window_start]},
+		fields=["employee", "employee_name", "log_type", "time", "shift"],
+		order_by="time",
+	)
+	days = {}
+	for c in checkins:
+		d = getdate(c.time)
+		if d >= today_d:
+			continue  # don't finalise today; its check-out may still come
+		key = (c.employee, str(d))
+		e = days.setdefault(key, {"in": None, "out": None, "shift": c.shift})
+		if c.log_type == "IN" and not e["in"]:
+			e["in"] = c.time
+		if c.log_type == "OUT":
+			e["out"] = c.time
+		if c.shift:
+			e["shift"] = c.shift
+	summary = {"present": 0, "half_day": 0, "in_only_present": 0, "skipped": 0}
+	for (emp, d), v in days.items():
+		if not v["in"]:
+			continue
+		if frappe.db.exists("Attendance", {"employee": emp, "attendance_date": d, "docstatus": ["<", 2]}):
+			summary["skipped"] += 1
+			continue
+		shift = v["shift"] or frappe.db.get_value("Employee", emp, "default_shift")
+		if v["out"]:
+			pr = _evaluate_attendance_policy(emp, d, v["in"], v["out"], shift)
+			res = _ensure_attendance(emp, d, v["in"], v["out"], pr, shift)
+			if res.get("status") == "Present":
+				summary["present"] += 1
+			elif res.get("status") == "Half Day":
+				summary["half_day"] += 1
+			else:
+				summary["skipped"] += 1
+		else:
+			# IN only: policy_result=None -> _ensure_attendance marks Present
+			res = _ensure_attendance(emp, d, v["in"], None, None, shift)
+			if res.get("attendance"):
+				summary["in_only_present"] += 1
+				_create_regularization(
+					emp, d, "Missing Mark Out", v["in"], None, 0, "Regularization Required",
+					remarks="Auto: checked in but no check-out recorded; marked Present pending HR review.",
+				)
+			else:
+				summary["skipped"] += 1
+	frappe.db.commit()
+	_attendance_logger().info("process_missing_attendance " + json.dumps(summary))
+	return summary
+
+
 @frappe.whitelist(allow_guest=True)
 def login(email=None, password=None):
 	if not email or not password:
