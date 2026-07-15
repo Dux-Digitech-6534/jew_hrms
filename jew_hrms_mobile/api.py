@@ -557,6 +557,66 @@ def _create_regularization(employee, attendance_date=None, issue_type=None, in_t
 	return doc.name
 
 
+def _attendance_status_from_policy(policy_result):
+	"""Map the JEW shift-policy outcome to a valid HRMS Attendance status.
+	Returns (status, is_half_day); status is None when the day should be left
+	for HR review (a Block Attendance issue) instead of auto-marking."""
+	if not policy_result or policy_result.get("status") == "Shift Policy Missing":
+		return "Present", False  # no policy configured -> a completed checkout counts as Present
+	if not policy_result.get("ok"):
+		return None, False  # a "Block Attendance" issue -> leave for regularization / HR
+	issues = policy_result.get("issues") or []
+	short = next((i for i in issues if i.get("issue_type") == "Short Hours"), None)
+	mark_half = any(i.get("action") == "Mark Half Day" for i in issues)
+	if short:
+		# policy tags <half-day hours as "Absent / HR Review": don't auto-stamp Absent
+		# (would hit payroll); leave it for the regularization already logged for HR.
+		if str(short.get("attendance_status") or "").startswith("Absent"):
+			return None, False
+		return "Half Day", True
+	if mark_half:
+		return "Half Day", True
+	return "Present", False  # full hours; late/early alone still counts Present (regularization logged for HR)
+
+
+def _ensure_attendance(employee, attendance_date, in_time=None, out_time=None, policy_result=None, shift=None):
+	"""Create + submit an Attendance for a completed (checked-out) day when one
+	does not already exist. Best-effort: never raises, so it can never block the
+	checkout. Days already marked (On Leave / holiday / existing attendance) are
+	skipped — HRMS's own validation is caught and treated as a skip."""
+	attendance_date = getdate(attendance_date)
+	if frappe.db.exists("Attendance", {"employee": employee, "attendance_date": attendance_date, "docstatus": ["<", 2]}):
+		return {"skipped": "already_exists"}
+	status, _is_half = _attendance_status_from_policy(policy_result)
+	if not status:
+		return {"skipped": "hr_review"}
+	emp = frappe.db.get_value("Employee", employee, ["company", "status"], as_dict=True) or frappe._dict()
+	if emp.get("status") and emp.status != "Active":
+		return {"skipped": "inactive"}
+	try:
+		doc = frappe.new_doc("Attendance")
+		doc.employee = employee
+		if emp.get("company"):
+			doc.company = emp.company
+		doc.attendance_date = attendance_date
+		doc.status = status
+		if doc.meta.has_field("working_hours"):
+			doc.working_hours = (policy_result or {}).get("working_hours") or 0
+		if in_time and doc.meta.has_field("in_time"):
+			doc.in_time = in_time
+		if out_time and doc.meta.has_field("out_time"):
+			doc.out_time = out_time
+		if shift and doc.meta.has_field("shift"):
+			doc.shift = shift
+		doc.insert(ignore_permissions=True)
+		doc.submit()
+		return {"attendance": doc.name, "status": status}
+	except Exception as exc:
+		# Leave/holiday overlap, duplicate, etc. -> skip quietly (Frappe rolls the
+		# failed insert back to its savepoint, leaving the checkin/regularization intact).
+		return {"skipped": "not_marked", "reason": str(exc)[:140]}
+
+
 @frappe.whitelist(allow_guest=True)
 def login(email=None, password=None):
 	if not email or not password:
@@ -774,8 +834,17 @@ def mark_attendance(type=None, image_data=None, latitude=None, longitude=None, a
 						issue.get("action"),
 						linked_employee_checkin=doc.name,
 					)
+			# Auto-mark Attendance for the completed day (Present / Half Day per policy).
+			# Best-effort: any failure here must never block the checkout itself.
+			try:
+				context["attendance_result"] = _ensure_attendance(
+					employee.name, today(), status.get("in_time"), status.get("out_time"),
+					policy_result, employee.get("default_shift"))
+				_log_attendance_debug("attendance_marked", context)
+			except Exception:
+				context["attendance_result"] = {"skipped": "error"}
 		message = "Marked In successfully." if log_type == "IN" else "Marked Out successfully."
-		return _ok({"employee_checkin": doc.name, "log_type": log_type, "time": doc.time, "face": face_result, "geofence": geo, "policy_result": policy_result, "attendance_status": status, **status}, message, "success")
+		return _ok({"employee_checkin": doc.name, "log_type": log_type, "time": doc.time, "face": face_result, "geofence": geo, "policy_result": policy_result, "attendance": context.get("attendance_result"), "attendance_status": status, **status}, message, "success")
 	except Exception:
 		frappe.db.rollback()
 		context["exception"] = traceback.format_exc()
