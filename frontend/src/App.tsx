@@ -135,6 +135,66 @@ const HIDDEN_LEAVE_TYPES = new Set(["CL", "SL", "PL", "LWP"]);
 // office. CL/PL themselves are HR buckets — not employee-selectable.
 const EMPLOYEE_LEAVE_TYPES = new Set(["Leave Request"]);
 
+// --- Robust camera + location acquisition (old Android / Chrome / WebView friendly) ---
+// Old cameras throw NotReadableError ("Could not start video source") on strict
+// constraints; try progressively simpler ones, with a short retry for transient
+// hardware locks.
+async function openCamera(): Promise<MediaStream> {
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error("Camera is not available on this device.");
+  const tries: MediaStreamConstraints[] = [
+    { video: { facingMode: "user", width: { ideal: 720 }, height: { ideal: 720 } }, audio: false },
+    { video: { facingMode: "user" }, audio: false },
+    { video: true, audio: false },
+  ];
+  let lastErr: any;
+  for (const constraints of tries) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try { return await navigator.mediaDevices.getUserMedia(constraints); }
+      catch (err: any) {
+        lastErr = err;
+        const name = err?.name || "";
+        if (name === "NotReadableError" || name === "TrackStartError" || name === "AbortError") {
+          await new Promise((r) => window.setTimeout(r, 500)); // transient — wait & retry same constraints
+          continue;
+        }
+        break; // OverconstrainedError / NotFoundError etc. — fall to simpler constraints
+      }
+    }
+  }
+  throw lastErr || new Error("Could not start the camera.");
+}
+
+// Old Chrome's first geolocation fix is a coarse NETWORK location (can be hundreds of
+// metres off) → false "outside geofence" even when on-site. Watch briefly and return
+// the most accurate fix. This only improves the position sent — it does NOT change the
+// server-side geofence rule.
+function getBestPosition(timeout = 15000, goodAccuracyM = 60): Promise<GeolocationCoordinates> {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) return reject(new Error("Location is not available on this device."));
+    let best: GeolocationCoordinates | null = null;
+    let settled = false;
+    let watchId = -1;
+    const finish = (err?: any) => {
+      if (settled) return; settled = true;
+      try { if (watchId >= 0) navigator.geolocation.clearWatch(watchId); } catch { /* ignore */ }
+      window.clearTimeout(timer);
+      if (best) resolve(best); else reject(err || new Error("no_fix"));
+    };
+    const timer = window.setTimeout(() => finish(), timeout);
+    try {
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          const c = pos.coords;
+          if (!best || (c.accuracy ?? 1e9) < (best.accuracy ?? 1e9)) best = c;
+          if ((c.accuracy ?? 1e9) <= goodAccuracyM) finish(); // good lock — stop early
+        },
+        (err) => { if (!best) finish(err); },
+        { enableHighAccuracy: true, timeout, maximumAge: 0 },
+      );
+    } catch (e) { finish(e); }
+  });
+}
+
 // Primary tab views: show the bottom tab bar (and use tab-height padding).
 // All other views are sub-screens: hide the tab bar + show a back button.
 const TAB_VIEWS: ReadonlySet<View> = new Set<View>(["dashboard", "attendance", "history", "leave", "admin", "profile"]);
@@ -702,16 +762,17 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: an
     return () => window.clearInterval(timer);
   }, []);
 
-  const requestPosition = (highAccuracy: boolean, timeout: number) => new Promise<GeolocationCoordinates>((resolve, reject) => {
-    navigator.geolocation.getCurrentPosition((pos) => resolve(pos.coords), (err) => reject(err), { enableHighAccuracy: highAccuracy, timeout, maximumAge: 30000 });
-  });
   const getCurrentLocation = async (): Promise<GeolocationCoordinates> => {
     if (!navigator.geolocation) throw new Error("Location is not available on this device.");
-    try { return await requestPosition(true, 15000); }
-    catch (err: any) {
+    try {
+      return await getBestPosition(15000, 60); // wait for a good GPS lock, take the most accurate fix
+    } catch (err: any) {
       if (err && err.code === 1) throw new Error("Location is turned off for this app. Please enable location/GPS and allow access, then try again.");
-      try { return await requestPosition(false, 20000); }
-      catch { throw new Error("Could not get your location. Please turn on GPS/location and try again in an open area."); }
+      // last resort: accept any single fix so a weak-GPS device can still submit
+      try {
+        return await new Promise<GeolocationCoordinates>((resolve, reject) =>
+          navigator.geolocation.getCurrentPosition((p) => resolve(p.coords), reject, { enableHighAccuracy: false, timeout: 20000, maximumAge: 60000 }));
+      } catch { throw new Error("Could not get your location. Please turn on GPS/location and try again in an open area."); }
     }
   };
 
@@ -733,9 +794,8 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: an
   }, []);
 
   const startVerifyCamera = async () => {
-    if (!navigator.mediaDevices?.getUserMedia) throw new Error("Camera is not available on this device.");
     setCameraStatus("Starting camera..."); setFaceStatus("Looking for face...");
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 720 }, height: { ideal: 720 } }, audio: false });
+    const stream = await openCamera();
     streamRef.current = stream; onCameraActiveChange?.(true);
     const video = videoRef.current; const canvas = canvasRef.current;
     if (!video || !canvas) throw new Error("Camera is not ready.");
@@ -1004,7 +1064,7 @@ function LiveCamera({ image, onCapture, flash, disabled = false, disabledMessage
     if (!navigator.mediaDevices?.getUserMedia) { flash("Camera failed", "Camera is not available on this device."); return; }
     setStarting(true); setStatusText("Starting camera…");
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 720 }, height: { ideal: 720 } }, audio: false });
+      const stream = await openCamera();
       streamRef.current = stream; setCameraActive(true);
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       const video = videoRef.current;
