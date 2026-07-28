@@ -3,7 +3,10 @@ import ReactDOM from "react-dom/client";
 import { FrappeProvider } from "frappe-react-sdk";
 import { BrowserRouter } from "react-router-dom";
 import App, { ErrorBoundary } from "./App";
+import { initAutoUpdate } from "./autoupdate";
 import "./styles.css";
+
+initAutoUpdate();
 
 function showRootFallback() {
   const root = document.getElementById("root");
