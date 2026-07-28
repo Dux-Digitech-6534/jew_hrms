@@ -558,25 +558,41 @@ def _create_regularization(employee, attendance_date=None, issue_type=None, in_t
 
 
 def _attendance_status_from_policy(policy_result):
-	"""Map the JEW shift-policy outcome to a valid HRMS Attendance status.
-	Returns (status, is_half_day); status is None when the day should be left
-	for HR review (a Block Attendance issue) instead of auto-marking."""
+	"""Grace-driven attendance status. Returns (status, late_entry, early_exit);
+	status is None when the day should be left for HR (a Block Attendance issue).
+
+	Rules (all thresholds come from the JEW Shift Attendance Policy so HR can tune them):
+	  - Punctual within grace (marked in within Late Coming Grace and out within Early
+	    Going Grace)                                   -> Present.
+	  - Late in / early out beyond grace but within the monthly allowance
+	    (Max Late/Early ... Per Month)                 -> Present, flagged late/early.
+	  - Monthly allowance exceeded (Action After ... = Mark Half Day / Mark LWP)
+	                                                    -> Half Day (flagged).
+	  - Beyond grace AND worked less than Half Day Minimum Hours -> Half Day.
+	  - Short hours alone (shift net span below Full Day Minimum Hours) does NOT
+	    downgrade a punctual day — that is a shift-config artifact (break time), not
+	    the employee being late."""
 	if not policy_result or policy_result.get("status") == "Shift Policy Missing":
-		return "Present", False  # no policy configured -> a completed checkout counts as Present
+		return "Present", 0, 0  # no policy configured -> a completed checkout counts as Present
 	if not policy_result.get("ok"):
-		return None, False  # a "Block Attendance" issue -> leave for regularization / HR
+		return None, 0, 0  # a "Block Attendance" issue -> leave for regularization / HR
 	issues = policy_result.get("issues") or []
+	late = any(i.get("issue_type") == "Late Coming" for i in issues)
+	early = any(i.get("issue_type") == "Early Going" for i in issues)
+	le, ee = (1 if late else 0), (1 if early else 0)
+	wh = float(policy_result.get("working_hours") or 0)
+	half = float((policy_result.get("policy") or {}).get("half_day_minimum_hours") or 4)
 	short = next((i for i in issues if i.get("issue_type") == "Short Hours"), None)
-	mark_half = any(i.get("action") == "Mark Half Day" for i in issues)
-	if short:
-		# policy tags <half-day hours as "Absent / HR Review": don't auto-stamp Absent
-		# (would hit payroll); leave it for the regularization already logged for HR.
-		if str(short.get("attendance_status") or "").startswith("Absent"):
-			return None, False
-		return "Half Day", True
-	if mark_half:
-		return "Half Day", True
-	return "Present", False  # full hours; late/early alone still counts Present (regularization logged for HR)
+	very_short = bool(short and str(short.get("attendance_status") or "").startswith("Absent"))
+	limit_half = any(
+		i.get("action") in ("Mark Half Day", "Mark LWP") and i.get("issue_type") in ("Late Coming", "Early Going")
+		for i in issues
+	)
+	if (late or early) and (very_short or wh < half):
+		return "Half Day", le, ee   # beyond grace AND worked less than half a day
+	if limit_half:
+		return "Half Day", le, ee   # exceeded the allowed late/early count for the month
+	return "Present", le, ee        # punctual within grace, or within the monthly allowance
 
 
 def _ensure_attendance(employee, attendance_date, in_time=None, out_time=None, policy_result=None, shift=None):
@@ -587,7 +603,7 @@ def _ensure_attendance(employee, attendance_date, in_time=None, out_time=None, p
 	attendance_date = getdate(attendance_date)
 	if frappe.db.exists("Attendance", {"employee": employee, "attendance_date": attendance_date, "docstatus": ["<", 2]}):
 		return {"skipped": "already_exists"}
-	status, _is_half = _attendance_status_from_policy(policy_result)
+	status, late_entry, early_exit = _attendance_status_from_policy(policy_result)
 	if not status:
 		return {"skipped": "hr_review"}
 	emp = frappe.db.get_value("Employee", employee, ["company", "status"], as_dict=True) or frappe._dict()
@@ -600,6 +616,10 @@ def _ensure_attendance(employee, attendance_date, in_time=None, out_time=None, p
 			doc.company = emp.company
 		doc.attendance_date = attendance_date
 		doc.status = status
+		if late_entry and doc.meta.has_field("late_entry"):
+			doc.late_entry = 1
+		if early_exit and doc.meta.has_field("early_exit"):
+			doc.early_exit = 1
 		if doc.meta.has_field("working_hours"):
 			doc.working_hours = (policy_result or {}).get("working_hours") or 0
 		if in_time and doc.meta.has_field("in_time"):
@@ -615,6 +635,57 @@ def _ensure_attendance(employee, attendance_date, in_time=None, out_time=None, p
 		# Leave/holiday overlap, duplicate, etc. -> skip quietly (Frappe rolls the
 		# failed insert back to its savepoint, leaving the checkin/regularization intact).
 		return {"skipped": "not_marked", "reason": str(exc)[:140]}
+
+
+def _company_holidays(company, cache):
+	if company in cache:
+		return cache[company]
+	hl = frappe.db.get_value("Company", company, "default_holiday_list")
+	dates = set(str(h.holiday_date) for h in frappe.get_all("Holiday", filters={"parent": hl}, fields=["holiday_date"])) if hl else set()
+	cache[company] = dates
+	return dates
+
+
+def _mark_absent_unmarked(window_start, today_d, summary):
+	"""Mark Absent for app-users (employees who have ever checked in) on PAST working
+	days in the window where they neither checked in nor already have attendance/leave.
+	Working days come from the company's default Holiday List, so weekly-offs and
+	holidays are never marked Absent. Scoped to app-users only — employees who never
+	use the app are left untouched."""
+	first = {}
+	for c in frappe.get_all("Employee Checkin", fields=["employee", "time"], order_by="time"):
+		first.setdefault(c.employee, getdate(c.time))
+	if not first:
+		return
+	onleave = set()
+	for la in frappe.get_all("Leave Application",
+	                         filters={"employee": ["in", list(first.keys())], "docstatus": 1, "to_date": [">=", str(window_start)]},
+	                         fields=["employee", "from_date", "to_date", "status"]):
+		js = frappe.db.get_value("Leave Application", {"employee": la.employee, "from_date": la.from_date}, "jew_hrms_approval_status")
+		if not (la.status == "Approved" or js == "Approved"):
+			continue
+		d, end = getdate(la.from_date), getdate(la.to_date)
+		while d <= end:
+			onleave.add((la.employee, str(d))); d = add_to_date(d, days=1)
+	hol_cache = {}
+	for emp, fdate in first.items():
+		if (frappe.db.get_value("Employee", emp, "status") or "Active") != "Active":
+			continue
+		company = frappe.db.get_value("Employee", emp, "company")
+		hols = _company_holidays(company, hol_cache)
+		d = max(getdate(window_start), fdate)
+		while d < today_d:  # never today
+			ds = str(d)
+			if ds in hols or (emp, ds) in onleave or frappe.db.exists("Attendance", {"employee": emp, "attendance_date": ds, "docstatus": ["<", 2]}):
+				d = add_to_date(d, days=1); continue
+			try:
+				doc = frappe.new_doc("Attendance"); doc.employee = emp; doc.company = company
+				doc.attendance_date = ds; doc.status = "Absent"
+				doc.insert(ignore_permissions=True); doc.submit()
+				summary["absent"] = summary.get("absent", 0) + 1
+			except Exception:
+				pass
+			d = add_to_date(d, days=1)
 
 
 def process_missing_attendance(days_back=30):
@@ -647,7 +718,7 @@ def process_missing_attendance(days_back=30):
 			e["out"] = c.time
 		if c.shift:
 			e["shift"] = c.shift
-	summary = {"present": 0, "half_day": 0, "in_only_present": 0, "skipped": 0}
+	summary = {"present": 0, "half_day": 0, "in_only_present": 0, "skipped": 0, "absent": 0}
 	for (emp, d), v in days.items():
 		if not v["in"]:
 			continue
@@ -675,6 +746,8 @@ def process_missing_attendance(days_back=30):
 				)
 			else:
 				summary["skipped"] += 1
+	# app-users' unmarked working days -> Absent (safe scope: holidays/leave/existing skipped)
+	_mark_absent_unmarked(window_start, today_d, summary)
 	frappe.db.commit()
 	_attendance_logger().info("process_missing_attendance " + json.dumps(summary))
 	return summary
