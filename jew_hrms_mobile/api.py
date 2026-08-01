@@ -457,6 +457,8 @@ def _policy_payload(doc):
 		"half_day_minimum_hours",
 		"late_coming_grace_minutes",
 		"early_going_grace_minutes",
+		"attendance_login_grace_minute",
+		"attendance_logout_grace_minute",
 		"max_late_coming_allowed_per_month",
 		"max_early_going_allowed_per_month",
 		"max_short_hours_allowed_per_month",
@@ -522,9 +524,21 @@ def _evaluate_attendance_policy(employee, attendance_date=None, in_time=None, ou
 				"working_hours": working_hours,
 				"attendance_status": "Half Day / Short Hours" if working_hours >= half_day else "Absent / HR Review",
 			})
+	# Attendance login/logout grace window — a SEPARATE, tighter grace from the late/early
+	# flag grace above. An employee who marks IN within login grace of shift start AND marks
+	# OUT within logout grace of shift end is Present regardless of net worked hours (the paid
+	# break makes a full attended shift dip below Full Day Minimum Hours by design, so hours
+	# must not force a Half Day). Needs both punches; IN-only days are handled elsewhere.
+	login_grace = int(policy.get("attendance_login_grace_minute") or 0)
+	logout_grace = int(policy.get("attendance_logout_grace_minute") or 0)
+	within_grace_window = False
+	if in_dt and out_dt:
+		latest_login = datetime.combine(attendance_date, policy_shift_start) + timedelta(minutes=login_grace)
+		earliest_logout = datetime.combine(attendance_date, policy_shift_end) - timedelta(minutes=logout_grace)
+		within_grace_window = in_dt <= latest_login and out_dt >= earliest_logout
 	status = "Present" if not issues else "Regularization Pending"
 	blocked = any(issue.get("action") == "Block Attendance" for issue in issues)
-	return {"ok": not blocked, "policy": _policy_payload(policy), "issues": issues, "status": status, "working_hours": working_hours}
+	return {"ok": not blocked, "policy": _policy_payload(policy), "issues": issues, "status": status, "working_hours": working_hours, "within_grace_window": within_grace_window}
 
 
 def _create_regularization(employee, attendance_date=None, issue_type=None, in_time=None, out_time=None, working_hours=None, policy_action=None, remarks=None, linked_attendance=None, linked_employee_checkin=None):
@@ -562,16 +576,22 @@ def _attendance_status_from_policy(policy_result):
 	status is None when the day should be left for HR (a Block Attendance issue).
 
 	Rules (all thresholds come from the JEW Shift Attendance Policy so HR can tune them):
-	  - Punctual within grace (marked in within Late Coming Grace and out within Early
-	    Going Grace)                                   -> Present.
-	  - Late in / early out beyond grace but within the monthly allowance
-	    (Max Late/Early ... Per Month)                 -> Present, flagged late/early.
+	  - Inside the login/logout grace window (marked IN within Attendance Login Grace of
+	    shift start AND OUT within Attendance Logout Grace of shift end)
+	                                                    -> Present, regardless of hours.
+	  - Late in / early out beyond the login/logout window but within the monthly allowance
+	    (Max Late/Early ... Per Month)                 -> Present, flagged late/early if
+	    beyond Late Coming / Early Going Grace.
 	  - Monthly allowance exceeded (Action After ... = Mark Half Day / Mark LWP)
 	                                                    -> Half Day (flagged).
 	  - Beyond grace AND worked less than Half Day Minimum Hours -> Half Day.
 	  - Short hours alone (shift net span below Full Day Minimum Hours) does NOT
 	    downgrade a punctual day — that is a shift-config artifact (break time), not
-	    the employee being late."""
+	    the employee being late.
+
+	Note the two independent graces: Attendance Login/Logout Grace decides Present here;
+	Late Coming / Early Going Grace only sets the late_entry/early_exit flags and feeds the
+	monthly Mark-Half-Day limit."""
 	if not policy_result or policy_result.get("status") == "Shift Policy Missing":
 		return "Present", 0, 0  # no policy configured -> a completed checkout counts as Present
 	if not policy_result.get("ok"):
@@ -588,11 +608,13 @@ def _attendance_status_from_policy(policy_result):
 		i.get("action") in ("Mark Half Day", "Mark LWP") and i.get("issue_type") in ("Late Coming", "Early Going")
 		for i in issues
 	)
-	if (late or early) and (very_short or wh < half):
-		return "Half Day", le, ee   # beyond grace AND worked less than half a day
+	if policy_result.get("within_grace_window"):
+		return "Present", le, ee    # IN/OUT inside the login/logout grace window -> Present, hours ignored
 	if limit_half:
 		return "Half Day", le, ee   # exceeded the allowed late/early count for the month
-	return "Present", le, ee        # punctual within grace, or within the monthly allowance
+	if (late or early) and (very_short or wh < half):
+		return "Half Day", le, ee   # beyond grace AND worked less than half a day
+	return "Present", le, ee        # outside the window but within the monthly allowance
 
 
 def _ensure_attendance(employee, attendance_date, in_time=None, out_time=None, policy_result=None, shift=None):
@@ -1207,6 +1229,53 @@ def _has_leave_allocation(employee, leave_type, from_dt, to_dt):
 	return bool(frappe.db.exists("Leave Allocation", {"employee": employee, "leave_type": leave_type, "docstatus": 1, "from_date": ["<=", from_dt], "to_date": [">=", to_dt]}))
 
 
+def _leave_approver_emails():
+	"""Enabled emails of the leave approvers (JEW HRMS HR / Admin / Owner)."""
+	users = set()
+	for role in ("JEW HRMS HR", "JEW HRMS Admin", "JEW HRMS Owner"):
+		for u in frappe.get_all("Has Role", filters={"role": role, "parenttype": "User"}, pluck="parent"):
+			users.add(u)
+	emails = []
+	for u in users:
+		if u in ("Administrator", "Guest"):
+			continue
+		info = frappe.db.get_value("User", u, ["email", "enabled"], as_dict=True)
+		if info and info.enabled and info.email and "@" in info.email:
+			emails.append(info.email)
+	return sorted(set(emails))
+
+
+def _send_leave_apply_mail(doc, employee_doc):
+	"""Email the approvers when a leave is applied. Best-effort — never breaks apply."""
+	try:
+		recipients = _leave_approver_emails()
+		if not recipients:
+			return
+		link = frappe.utils.get_url() + "/app/leave-application/" + doc.name
+		days = "0.5 (Half Day)" if int(doc.get("half_day") or 0) else str(frappe.utils.date_diff(doc.to_date, doc.from_date) + 1)
+		subject = "Leave request: {0} ({1})".format(employee_doc.employee_name, doc.leave_type)
+		message = (
+			"<p>A new leave request needs your approval.</p>"
+			"<table cellpadding='6' style='border-collapse:collapse'>"
+			"<tr><td><b>Employee</b></td><td>{emp}</td></tr>"
+			"<tr><td><b>Leave type</b></td><td>{lt}</td></tr>"
+			"<tr><td><b>From</b></td><td>{fr}</td></tr>"
+			"<tr><td><b>To</b></td><td>{to}</td></tr>"
+			"<tr><td><b>Days</b></td><td>{days}</td></tr>"
+			"<tr><td><b>Reason</b></td><td>{reason}</td></tr>"
+			"</table>"
+			"<p><a href='{link}'>Open in ERP to approve / reject</a></p>"
+		).format(
+			emp=frappe.utils.escape_html(employee_doc.employee_name or ""), lt=frappe.utils.escape_html(doc.leave_type or ""),
+			fr=frappe.utils.formatdate(doc.from_date), to=frappe.utils.formatdate(doc.to_date),
+			days=days, reason=frappe.utils.escape_html(doc.get("description") or "-"), link=link,
+		)
+		frappe.sendmail(recipients=recipients, subject=subject, message=message,
+		                reference_doctype="Leave Application", reference_name=doc.name)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "JEW HRMS leave apply mail failed")
+
+
 @frappe.whitelist()
 def apply_leave(employee=None, leave_type=None, from_date=None, to_date=None, half_day=0, half_day_date=None, half_day_type=None, reason=None, attachment=None):
 	is_admin = _is_admin()
@@ -1240,6 +1309,8 @@ def apply_leave(employee=None, leave_type=None, from_date=None, to_date=None, ha
 		return _fail("Half Day Date is required.", "validation_error")
 	if half_dt and (half_dt < from_dt or half_dt > to_dt):
 		return _fail("Half Day Date must be between From Date and To Date.", "validation_error")
+	if is_half_day and from_dt != to_dt:
+		return _fail("Half day can only be applied on a single-day leave (From and To must be the same day).", "half_day_multi_day")
 	if _leave_overlap_exists(employee_doc.name, from_dt, to_dt):
 		return _fail("Leave dates overlap with an existing leave.", "leave_overlap")
 	if not _has_leave_allocation(employee_doc.name, leave_type, from_dt, to_dt):
@@ -1267,6 +1338,7 @@ def apply_leave(employee=None, leave_type=None, from_date=None, to_date=None, ha
 			doc.attachment = attachment
 			doc.save(ignore_permissions=True)
 		_safe_insert_notification(employee_doc.name, "Leave submitted", f"{leave_type} leave is pending approval.", "Info", "Leave Application", doc.name)
+		_send_leave_apply_mail(doc, employee_doc)
 		message = "Leave request submitted successfully."
 		frappe.db.commit()
 		return _ok({"name": doc.name, "leave_application": doc.name, "docstatus": doc.docstatus, "approval_status": _leave_approval_status(doc)}, message)
@@ -1487,7 +1559,7 @@ def get_shift_policies():
 		return _ok({"policies": []})
 	policies = frappe.get_list(
 		"JEW Shift Attendance Policy",
-		fields=["name", "shift_name", "shift_start_time", "shift_end_time", "full_day_minimum_hours", "half_day_minimum_hours", "late_coming_grace_minutes", "early_going_grace_minutes", "is_active"],
+		fields=["name", "shift_name", "shift_start_time", "shift_end_time", "full_day_minimum_hours", "half_day_minimum_hours", "late_coming_grace_minutes", "early_going_grace_minutes", "attendance_login_grace_minute", "attendance_logout_grace_minute", "is_active"],
 		order_by="modified desc",
 		ignore_permissions=True,
 	)
@@ -1510,6 +1582,8 @@ def save_shift_policy(**kwargs):
 		"half_day_minimum_hours",
 		"late_coming_grace_minutes",
 		"early_going_grace_minutes",
+		"attendance_login_grace_minute",
+		"attendance_logout_grace_minute",
 		"max_late_coming_allowed_per_month",
 		"max_early_going_allowed_per_month",
 		"max_short_hours_allowed_per_month",

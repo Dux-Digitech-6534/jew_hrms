@@ -941,6 +941,9 @@ function Leave({ data, caps, flash, reload, me }: any) {
   useEffect(() => {
     if (me?.employee) setForm((f: any) => (f.employee ? f : { ...f, employee: me.employee }));
   }, [me?.employee]);
+  // Half day is only valid for a single-day leave (From === To). Force it off otherwise.
+  const singleDay = !!(form.from_date && form.to_date && form.from_date === form.to_date);
+  useEffect(() => { if (!singleDay && form.half_day) setForm((f: any) => ({ ...f, half_day: false, half_day_date: "" })); }, [singleDay]);
   const submit = async () => {
     const missing: string[] = [];
     if (!form.leave_type) missing.push("Leave type");
@@ -949,8 +952,10 @@ function Leave({ data, caps, flash, reload, me }: any) {
     if (form.half_day && !form.half_day_date) missing.push("Half day date");
     if (missing.length) { flash("Required fields", `${missing.join(", ")} ${missing.length > 1 ? "are" : "is"} required.`); return; }
     if (form.from_date > form.to_date) { flash("Invalid dates", "From Date cannot be after To Date."); return; }
+    if (form.half_day && !singleDay) { flash("Half day", "Half day can only be applied on a single-day leave (From and To same day)."); return; }
     const result = await runAction("submit-leave", async () => {
-      const payload = canSelectEmployee ? form : { ...form, employee: undefined };
+      const base = canSelectEmployee ? form : { ...form, employee: undefined };
+      const payload = { ...base, half_day_date: form.half_day ? form.from_date : "" };
       const response = await call(API.applyLeave, payload);
       await reload();
       return response;
@@ -972,11 +977,11 @@ function Leave({ data, caps, flash, reload, me }: any) {
         <Field label="From" icon="calendar" type="date" value={form.from_date} onChange={(v: string) => setForm({ ...form, from_date: v })} />
         <Field label="To" icon="calendar" type="date" value={form.to_date} onChange={(v: string) => setForm({ ...form, to_date: v })} />
       </div>
-      <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 13, color: "var(--muted)", fontSize: 12.5, fontWeight: 600 }}>
-        <input type="checkbox" style={{ accentColor: "var(--iris)" }} checked={form.half_day} onChange={(e) => setForm({ ...form, half_day: e.target.checked })} /> Half day
+      <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 13, color: "var(--muted)", fontSize: 12.5, fontWeight: 600, opacity: singleDay ? 1 : 0.5 }}>
+        <input type="checkbox" style={{ accentColor: "var(--iris)" }} disabled={!singleDay} checked={form.half_day} onChange={(e) => setForm({ ...form, half_day: e.target.checked, half_day_date: e.target.checked ? form.from_date : "" })} /> Half day
       </label>
-      {form.half_day && <Field label="Half day date" icon="calendar" type="date" value={form.half_day_date} onChange={(v: string) => setForm({ ...form, half_day_date: v })} />}
-      {form.half_day && <Select label="Half day type" value={form.half_day_type} onChange={(v: string) => setForm({ ...form, half_day_type: v })} options={["First Half", "Second Half"]} />}
+      {!singleDay && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 4 }}>Half day only for a single-day leave (From and To same day).</div>}
+      {form.half_day && singleDay && <Select label="Half day type" value={form.half_day_type} onChange={(v: string) => setForm({ ...form, half_day_type: v })} options={["First Half", "Second Half"]} />}
       <Field label="Reason" value={form.reason} onChange={(v: string) => setForm({ ...form, reason: v })} placeholder="Add a short note (optional)" />
       <div style={{ marginTop: 16 }}><button className="btn" type="button" disabled={isAnyBusy} onClick={submit}><Ic name="check" /> {isBusy("submit-leave") ? "Submitting…" : "Submit leave request"}</button></div>
     </div>
