@@ -988,8 +988,8 @@ function History() {
         <button type="button" style={presetStyle(false)} onClick={lastMonth}>Last month</button>
       </div>
       <div className="grid2" style={{ marginTop: 12 }}>
-        <Field label="From" icon="calendar" type="date" value={from} onChange={(v: string) => setFrom(v)} />
-        <Field label="To" icon="calendar" type="date" value={to} onChange={(v: string) => setTo(v)} />
+        <Field label="From" icon="calendar" type="date" value={from} max={todayStr} onChange={(v: string) => { setFrom(v); if (to && v && to < v) setTo(v); }} />
+        <Field label="To" icon="calendar" type="date" value={to} min={from} max={todayStr} onChange={(v: string) => setTo(v)} />
       </div>
       <div style={{ marginTop: 12 }}><button className="btn" type="button" disabled={loading || !from || !to || from > to} onClick={() => load(from, to)}><Ic name="clock" /> {loading ? "Loading…" : "Show"}</button></div>
       {from > to && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 4 }}>From date cannot be after To date.</div>}
@@ -1007,6 +1007,12 @@ function Leave({ data, caps, flash, reload, me }: any) {
   const [form, setForm] = useState({ employee: "", leave_type: "", from_date: "", to_date: "", reason: "", half_day: false, half_day_date: "", half_day_type: "First Half" });
   const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
   const canSelectEmployee = Boolean(caps?.can_view_admin);
+  // Employees can't apply for past dates (backend also blocks it); admins may
+  // back-date on behalf of others. "To" can never be before "From".
+  const todayStr = (() => { const d = new Date(); const p = (n: number) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; })();
+  const minFrom = canSelectEmployee ? undefined : todayStr;
+  // Setting From also drags To forward if To is now earlier than From.
+  const setFromDate = (v: string) => setForm((f: any) => ({ ...f, from_date: v, to_date: f.to_date && v && f.to_date < v ? v : f.to_date }));
   // Default the employee to the logged-in user. Admins can change it; a plain
   // employee sees their own (fixed) and the payload always resolves to them.
   useEffect(() => {
@@ -1058,8 +1064,8 @@ function Leave({ data, caps, flash, reload, me }: any) {
       <Select label="Leave type" value={form.leave_type} onChange={(v: string) => setForm({ ...form, leave_type: v })} options={buildLeaveTypeOptions(data.selectable, data.types)} />
       {balanceHint && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 4 }}>{balanceHint}</div>}
       <div className="grid2" style={{ marginTop: 13 }}>
-        <Field label="From" icon="calendar" type="date" value={form.from_date} onChange={(v: string) => setForm({ ...form, from_date: v })} />
-        <Field label="To" icon="calendar" type="date" value={form.to_date} onChange={(v: string) => setForm({ ...form, to_date: v })} />
+        <Field label="From" icon="calendar" type="date" value={form.from_date} min={minFrom} onChange={setFromDate} />
+        <Field label="To" icon="calendar" type="date" value={form.to_date} min={form.from_date || minFrom} onChange={(v: string) => setForm({ ...form, to_date: v })} />
       </div>
       <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 13, color: "var(--muted)", fontSize: 12.5, fontWeight: 600, opacity: singleDay ? 1 : 0.5 }}>
         <input type="checkbox" style={{ accentColor: "var(--iris)" }} disabled={!singleDay} checked={form.half_day} onChange={(e) => setForm({ ...form, half_day: e.target.checked, half_day_date: e.target.checked ? form.from_date : "" })} /> Half day
@@ -1446,8 +1452,8 @@ function Settings({ theme, setTheme, onLogout }: any) {
   </>;
 }
 
-function Field({ label, value, onChange, type = "text", icon, placeholder }: any) {
-  return <div className="field"><label>{label}</label><div className="inp">{icon && <Ic name={icon} />}<input type={type} value={value ?? ""} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} /></div></div>;
+function Field({ label, value, onChange, type = "text", icon, placeholder, min, max }: any) {
+  return <div className="field"><label>{label}</label><div className="inp">{icon && <Ic name={icon} />}<input type={type} value={value ?? ""} placeholder={placeholder} min={min} max={max} onChange={(e) => onChange(e.target.value)} /></div></div>;
 }
 
 function Select({ label, value, onChange, options, icon }: any) {
