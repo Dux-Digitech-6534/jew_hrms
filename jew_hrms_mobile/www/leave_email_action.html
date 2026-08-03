@@ -1,0 +1,89 @@
+{% extends "templates/web.html" %}
+{% block title %}Leave Application{% endblock %}
+{% block page_content %}
+<style>
+  :root {
+    --paper: #f4f6f8; --ink: #1a2733; --muted: #64707a; --line: #d7dee3; --card: #ffffff;
+    --approve: #1a7f45; --reject: #b3341f; --approve-bg: #eaf6ee; --reject-bg: #fbecea;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --paper: #10171d; --ink: #e7edf1; --muted: #93a1ab; --line: #2a353d; --card: #162027;
+      --approve: #3fbf74; --reject: #e06a54; --approve-bg: #123321; --reject-bg: #391f19; }
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--paper); color: var(--ink); font-family: "Segoe UI", ui-sans-serif, system-ui, sans-serif; }
+  .wrap { max-width: 480px; margin: 0 auto; padding: 40px 20px 60px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 24px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0 0 20px; }
+  .rows { border-top: 1px solid var(--line); margin-top: 16px; }
+  .row { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 14.5px; }
+  .row .k { color: var(--muted); }
+  .row .v { text-align: right; font-weight: 500; }
+  textarea { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 10px; font-family: inherit; font-size: 14px;
+    background: var(--paper); color: var(--ink); margin-top: 8px; min-height: 80px; resize: vertical; }
+  .btn { display: block; width: 100%; text-align: center; padding: 13px; border-radius: 7px; border: none; font-size: 15.5px;
+    font-weight: 600; cursor: pointer; margin-top: 20px; color: #fff; }
+  .btn.approve { background: var(--approve); }
+  .btn.reject { background: var(--reject); }
+  .btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .notice { border-radius: 7px; padding: 12px 14px; font-size: 14px; margin-bottom: 16px; }
+  .notice.ok { background: var(--approve-bg); color: var(--approve); }
+  .notice.fail { background: var(--reject-bg); color: var(--reject); }
+  .warn { background: var(--reject-bg); color: var(--reject); border-radius: 6px; padding: 8px 12px; font-size: 13px; margin-top: 10px; }
+  .footnote { color: var(--muted); font-size: 12.5px; margin-top: 18px; text-align: center; }
+</style>
+
+<div class="wrap">
+  <div class="card">
+    {% if done %}
+      <div class="notice {{ 'ok' if ok else 'fail' }}">{{ message or ("Done." if ok else "Could not complete this action.") }}</div>
+      <p class="sub">You can close this page.</p>
+    {% elif error %}
+      <h1>Link not valid</h1>
+      <p class="sub">{{ error }}</p>
+      <p class="footnote">Open the Leave Application directly in the app to act on it instead.</p>
+    {% elif action == "view" %}
+      <h1>Leave Application</h1>
+      <p class="sub">{{ leave.employee_name }}</p>
+      <div class="rows">
+        <div class="row"><div class="k">Employee</div><div class="v">{{ leave.employee_name }}</div></div>
+        <div class="row"><div class="k">Leave Type</div><div class="v">{{ leave.leave_type }}</div></div>
+        <div class="row"><div class="k">Period</div><div class="v">{{ leave.from_date }} to {{ leave.to_date }}</div></div>
+        <div class="row"><div class="k">Total Days</div><div class="v">{{ leave.total_leave_days }}</div></div>
+        <div class="row"><div class="k">Reason</div><div class="v">{{ leave.reason }}</div></div>
+        <div class="row"><div class="k">Current Status</div><div class="v">{{ leave.status }}</div></div>
+      </div>
+      <p class="footnote">Use the Approve / Reject buttons in the email to act on this application.</p>
+    {% else %}
+      <h1>{{ "Approve" if action == "approve" else "Reject" }} leave application</h1>
+      <p class="sub">Acting as <strong>{{ leave.acting_as }}</strong></p>
+
+      <div class="rows">
+        <div class="row"><div class="k">Employee</div><div class="v">{{ leave.employee_name }}</div></div>
+        <div class="row"><div class="k">Leave Type</div><div class="v">{{ leave.leave_type }}</div></div>
+        <div class="row"><div class="k">Period</div><div class="v">{{ leave.from_date }} to {{ leave.to_date }}</div></div>
+        <div class="row"><div class="k">Total Days</div><div class="v">{{ leave.total_leave_days }}</div></div>
+        <div class="row"><div class="k">Reason</div><div class="v">{{ leave.reason }}</div></div>
+      </div>
+
+      <form method="POST" action="/api/method/jew_hrms_mobile.api.confirm_leave_email_action">
+        <input type="hidden" name="token" value="{{ token }}">
+        <input type="hidden" name="action" value="{{ action }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        {% if action == "reject" %}
+          {% if missing_remarks %}
+            <div class="warn">A reason is required to reject this application.</div>
+          {% endif %}
+          <label for="remarks" class="sub" style="margin-top:16px; display:block;">Reason for rejection (required)</label>
+          <textarea id="remarks" name="remarks" required></textarea>
+        {% endif %}
+        <button type="submit" class="btn {{ 'approve' if action == 'approve' else 'reject' }}">
+          Confirm {{ "Approve" if action == "approve" else "Reject" }}
+        </button>
+      </form>
+      <p class="footnote">This link works once and expires after {{ token_validity_days }} days.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -139,13 +139,13 @@ website_route_rules = [
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+doc_events = {
+	"Leave Application": {
+		"before_insert": "jew_hrms_mobile.api.set_initial_leave_approval_stage",
+		"after_insert": "jew_hrms_mobile.api.send_initial_leave_stage_email",
+		"on_submit": "jew_hrms_mobile.api.sync_approved_leave_to_salary_slip",
+	}
+}
 
 # Scheduled Tasks
 # ---------------
@@ -154,7 +154,10 @@ scheduler_events = {
 	"daily": [
 		# Reconcile past days that have check-ins but no Attendance:
 		# IN+OUT -> policy status (safety net); IN-only -> Present + Missing Mark Out regularization.
-		"jew_hrms_mobile.api.process_missing_attendance"
+		"jew_hrms_mobile.api.process_missing_attendance",
+		# Leave Applications stuck in the Owner-approval stage past OWNER_AUTO_APPROVE_DAYS
+		# advance automatically to HR, with an email noting Owner never acted.
+		"jew_hrms_mobile.api.auto_approve_stale_owner_leaves",
 	],
 }
 

@@ -130,10 +130,30 @@ function dedupeByLabel(options: any[]) {
 // shows once. Consolidating these in Frappe is the proper long-term fix.
 const HIDDEN_LEAVE_TYPES = new Set(["CL", "SL", "PL", "LWP"]);
 
-// Leave type(s) an employee can pick when applying. "Leave Request" is an
-// unlimited (no-allocation) type; HR categorises it against CL/PL in the back
-// office. CL/PL themselves are HR buckets — not employee-selectable.
-const EMPLOYEE_LEAVE_TYPES = new Set(["Leave Request"]);
+// Build the leave-type picker options, mirroring the Desk Leave Application's
+// leave_type link field (ALL leave types are selectable). The backend
+// (get_leave_dashboard) returns `selectable_types` already ordered
+// allocated-first, each annotated with the live remaining balance, an
+// `unlimited` (is_lwp) flag, or `has_allocation:false` for types the employee
+// isn't allocated. That annotation becomes the option sub-label. If the list is
+// unavailable (older backend), fall back to the full Leave Type list minus the
+// duplicate short-code records.
+function buildLeaveTypeOptions(selectable: any[], allTypes: any[]) {
+  const src = (selectable && selectable.length)
+    ? selectable
+    : (allTypes || [])
+        .filter((t: any) => !HIDDEN_LEAVE_TYPES.has(t.name))
+        .map((t: any) => ({ leave_type: t.name, leave_type_name: t.leave_type_name || t.name, is_lwp: t.is_lwp, unlimited: !!t.is_lwp, balance: null, has_allocation: undefined }));
+  return src.map((t: any) => {
+    const n = Number(t.balance);
+    const desc = t.unlimited
+      ? "No balance limit"
+      : (t.balance != null && !Number.isNaN(n)
+          ? `${n} day${n === 1 ? "" : "s"} left`
+          : (t.has_allocation === false ? "No allocation — ask HR" : ""));
+    return { value: t.leave_type, label: t.leave_type_name || t.leave_type, description: desc };
+  });
+}
 
 // --- Robust camera + location acquisition (old Android / Chrome / WebView friendly) ---
 // Old cameras throw NotReadableError ("Could not start video source") on strict
@@ -291,7 +311,6 @@ export default function App() {
   const [session, setSession] = useState<any>(null);
   const [dashboard, setDashboard] = useState<any>(null);
   const [profile, setProfile] = useState<any>(null);
-  const [history, setHistory] = useState<any>(null);
   const [leaveData, setLeaveData] = useState<any>({});
   const [adminData, setAdminData] = useState<any>({});
   const [selectedEmployee, setSelectedEmployee] = useState("");
@@ -319,7 +338,7 @@ export default function App() {
   const resetSessionState = () => {
     window.dispatchEvent(new Event("jew-hrms-stop-camera"));
     window.dispatchEvent(new Event("jew-hrms-close-attendance-verify"));
-    setSession(null); setDashboard(null); setProfile(null); setHistory(null);
+    setSession(null); setDashboard(null); setProfile(null);
     setLeaveData({}); setAdminData({}); setSelectedEmployee(""); setNotifications([]);
     setCaps(DENY); setView("dashboard"); setViewStack([]); setMenuOpen(false);
     setRefreshing(false); setCameraActive(false);
@@ -359,12 +378,25 @@ export default function App() {
       const status = await call(API.getTodayAttendanceStatus);
       setAdminData((prev: any) => ({ ...prev, attendanceStatus: status }));
     }
-    if (next === "history") setHistory(await call(API.getAttendanceHistory));
+    // History loads its own data (self-contained date-range filter) — no fetch here.
     if (next === "leave") {
-      const calls: Promise<any>[] = [call(API.getLeaveTypes), call(API.getLeaveDashboard), call(API.getMyLeaves)];
-      if (caps.can_view_admin) calls.push(call(API.getEmployeeList));
-      const [types, dash, mine, employees] = await Promise.all(calls);
-      setLeaveData({ types: types.leave_types, balances: dash.balances, leaves: mine.leaves, employees: employees?.employees || [] });
+      // Load each part independently — a failure in one call (e.g. an employee
+      // with no allocations) must not blank out the whole leave form.
+      const [typesR, dashR, mineR, empR] = await Promise.allSettled([
+        call(API.getLeaveTypes),
+        call(API.getLeaveDashboard),
+        call(API.getMyLeaves),
+        caps.can_view_admin ? call(API.getEmployeeList) : Promise.resolve({ employees: [] }),
+      ]);
+      const val = (r: any) => (r && r.status === "fulfilled" ? r.value : {});
+      const types = val(typesR), dash = val(dashR), mine = val(mineR), employees = val(empR);
+      setLeaveData({
+        types: types.leave_types || [],
+        selectable: dash.selectable_types || [],
+        balances: dash.balances || [],
+        leaves: mine.leaves || [],
+        employees: employees?.employees || [],
+      });
     }
     if (next === "profile") setProfile((await call(API.getEmployeeProfile)).employee_profile);
     if (next === "notifications") setNotifications((await call(API.getNotifications)).notifications || []);
@@ -512,7 +544,7 @@ export default function App() {
           <main className={`page ${showTabs ? "" : "noTab"}`}>
             {view === "dashboard" && <Dashboard data={dashboard} open={open} caps={caps} flash={flash} session={session} />}
             {view === "attendance" && <Attendance flash={flash} open={open} initialStatus={adminData.attendanceStatus} onCameraActiveChange={setCameraActive} onMarked={async () => { setDashboard(await call(API.getDashboard)); const status = await call(API.getTodayAttendanceStatus); setAdminData((prev: any) => ({ ...prev, attendanceStatus: status })); }} />}
-            {view === "history" && <History data={history} />}
+            {view === "history" && <History />}
             {view === "leave" && <Leave data={leaveData} caps={caps} flash={flash} me={session?.employee} reload={() => open("leave")} />}
             {view === "admin" && (caps.can_view_admin ? <Admin open={open} caps={caps} data={adminData} /> : <NotPermitted />)}
             {view === "face" && (caps.can_view_admin && caps.can_register_face ? <FaceAdmin employees={adminData.employees || []} flash={flash} selectedEmployee={selectedEmployee} onCameraActiveChange={setCameraActive} /> : <NotPermitted />)}
@@ -691,8 +723,10 @@ function Chip({ kind = "info", icon, children }: any) {
 }
 function statusChipKind(status?: string) {
   const s = String(status || "").toLowerCase();
-  if (s.includes("approv")) return "ok";
+  // Order matters: "Pending … Approval" contains "approv" but is NOT approved.
   if (s.includes("reject") || s.includes("cancel")) return "err";
+  if (s.includes("pending")) return "pend";
+  if (s.includes("approv")) return "ok";
   return "pend";
 }
 
@@ -914,26 +948,63 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: an
   );
 }
 
-function History({ data }: any) {
+function History() {
+  // Default view = CURRENT month (1st → today). Users can pick any From–To range
+  // (e.g. last month) via the presets or the date fields.
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const iso = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const now = new Date();
+  const monthStart = iso(new Date(now.getFullYear(), now.getMonth(), 1));
+  const todayStr = iso(now);
+  const [from, setFrom] = useState(monthStart);
+  const [to, setTo] = useState(todayStr);
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const load = async (f: string, t: string) => {
+    setLoading(true);
+    try { setData(await call(API.getAttendanceHistory, { from_date: f, to_date: t })); }
+    catch { setData({ checkins: [], attendance: [] }); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(monthStart, todayStr); }, []);
+  const applyRange = (f: string, t: string) => { setFrom(f); setTo(t); load(f, t); };
+  const lastMonth = () => applyRange(
+    iso(new Date(now.getFullYear(), now.getMonth() - 1, 1)),
+    iso(new Date(now.getFullYear(), now.getMonth(), 0)),
+  );
+  const isThisMonth = from === monthStart && to === todayStr;
+  const presetStyle = (active: boolean) => ({ flex: 1, padding: "9px 0", borderRadius: 10, border: "none", background: active ? "var(--iris)" : "var(--iris-tint)", color: active ? "#fff" : "var(--iris)", fontWeight: 600, fontSize: 12.5, cursor: "pointer" } as const);
   const checkins = data?.checkins || [];
   const attendance = data?.attendance || [];
   const present = attendance.filter((a: any) => String(a.status).toLowerCase().includes("present")).length;
   return <>
     <div className="grid2">
-      <Stat icon="check" label="Present" value={present || attendance.length || 0} small={attendance.length ? `/${attendance.length}` : ""} />
+      <Stat icon="check" label="Present" value={present || 0} small={attendance.length ? `/${attendance.length}` : ""} />
       <Stat icon="clock" label="Records" value={checkins.length} />
     </div>
-    <div className="sec-lab">Recent checkins</div>
+    <div className="card" style={{ marginTop: 12 }}>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button type="button" style={presetStyle(isThisMonth)} onClick={() => applyRange(monthStart, todayStr)}>This month</button>
+        <button type="button" style={presetStyle(false)} onClick={lastMonth}>Last month</button>
+      </div>
+      <div className="grid2" style={{ marginTop: 12 }}>
+        <Field label="From" icon="calendar" type="date" value={from} onChange={(v: string) => setFrom(v)} />
+        <Field label="To" icon="calendar" type="date" value={to} onChange={(v: string) => setTo(v)} />
+      </div>
+      <div style={{ marginTop: 12 }}><button className="btn" type="button" disabled={loading || !from || !to || from > to} onClick={() => load(from, to)}><Ic name="clock" /> {loading ? "Loading…" : "Show"}</button></div>
+      {from > to && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 4 }}>From date cannot be after To date.</div>}
+    </div>
+    <div className="sec-lab">Checkins · {fmtDMY(from)} → {fmtDMY(to)}</div>
     <div className="card list" style={{ padding: "4px 15px" }}>
-      {checkins.length ? checkins.map((row: any) => (
+      {loading ? <div className="empty"><p>Loading…</p></div> : checkins.length ? checkins.map((row: any) => (
         <div className="row" key={row.name}><div className="date" style={{ width: 76 }}>{fmtDMY(row.time)}</div><div className="mid"><strong>{row.log_type}</strong><span>{String(row.time).slice(11, 16)}</span></div><Chip kind="ok">Synced</Chip></div>
-      )) : <div className="empty"><h3>No records</h3><p>No attendance records found.</p></div>}
+      )) : <div className="empty"><h3>No records</h3><p>No attendance records in this period.</p></div>}
     </div>
   </>;
 }
 
 function Leave({ data, caps, flash, reload, me }: any) {
-  const [form, setForm] = useState({ employee: "", leave_type: "Leave Request", from_date: "", to_date: "", reason: "", half_day: false, half_day_date: "", half_day_type: "First Half" });
+  const [form, setForm] = useState({ employee: "", leave_type: "", from_date: "", to_date: "", reason: "", half_day: false, half_day_date: "", half_day_type: "First Half" });
   const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
   const canSelectEmployee = Boolean(caps?.can_view_admin);
   // Default the employee to the logged-in user. Admins can change it; a plain
@@ -960,19 +1031,32 @@ function Leave({ data, caps, flash, reload, me }: any) {
       await reload();
       return response;
     }, { successTitle: "Leave submitted", errorTitle: "Leave failed" });
-    if (result) setForm({ employee: me?.employee || "", leave_type: "Leave Request", from_date: "", to_date: "", reason: "", half_day: false, half_day_date: "", half_day_type: "First Half" });
+    if (result) setForm({ employee: me?.employee || "", leave_type: "", from_date: "", to_date: "", reason: "", half_day: false, half_day_date: "", half_day_type: "First Half" });
   };
   const cancelLeave = async (name: string) => {
     await runAction(`cancel-${name}`, async () => { await call(API.cancelLeave, { name }); reload(); }, { successTitle: "Leave cancelled", successMessage: "Leave request updated.", errorTitle: "Cancel failed" });
   };
   const balances = data.balances || [];
+  const selectable = data.selectable || [];
+  // Live balance note for the currently-selected leave type.
+  const selectedType = selectable.find((t: any) => t.leave_type === form.leave_type);
+  const balanceHint = !form.leave_type
+    ? ""
+    : selectedType
+      ? (selectedType.unlimited
+          ? "This leave type has no balance limit."
+          : selectedType.has_allocation === false
+            ? "You have no allocation for this leave type — it may be rejected. Contact HR."
+            : `Balance: ${Number(selectedType.balance ?? 0)} day${Number(selectedType.balance ?? 0) === 1 ? "" : "s"} remaining.`)
+      : "";
   return <>
-    {balances.length > 0 && <div className="grid2">{dedupeByLabel(balances.filter((b: any) => !HIDDEN_LEAVE_TYPES.has(b.leave_type)).map((b: any) => ({ ...b, label: b.leave_type }))).slice(0, 2).map((b: any, i: number) => <Stat key={i} label={b.leave_type} value={Number(b.total_leaves_allocated ?? 0)} small=" days" />)}</div>}
+    {balances.length > 0 && <div className="grid2">{dedupeByLabel(balances.map((b: any) => ({ ...b, label: b.leave_type_name || b.leave_type }))).slice(0, 2).map((b: any, i: number) => <Stat key={i} label={b.leave_type_name || b.leave_type} value={Number(b.balance ?? b.total_leaves_allocated ?? 0)} small=" left" />)}</div>}
     <div className="card" style={{ marginTop: balances.length ? 12 : 0 }}>
       {canSelectEmployee
         ? <Select label="Employee" value={form.employee} onChange={(v: string) => setForm({ ...form, employee: v })} options={(data.employees || []).map((e: any) => ({ value: e.name, label: e.employee_name || e.name, description: e.description || e.name }))} />
         : <div className="field"><label>Employee</label><div className="inp" style={{ opacity: 0.9 }}><Ic name="user" /><span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{me?.employee_name || me?.employee || "You"}</span></div></div>}
-      <Select label="Leave type" value={form.leave_type} onChange={(v: string) => setForm({ ...form, leave_type: v })} options={(data.types || []).filter((t: any) => EMPLOYEE_LEAVE_TYPES.has(t.name)).map((t: any) => ({ value: t.name, label: t.leave_type_name || t.name }))} />
+      <Select label="Leave type" value={form.leave_type} onChange={(v: string) => setForm({ ...form, leave_type: v })} options={buildLeaveTypeOptions(data.selectable, data.types)} />
+      {balanceHint && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 4 }}>{balanceHint}</div>}
       <div className="grid2" style={{ marginTop: 13 }}>
         <Field label="From" icon="calendar" type="date" value={form.from_date} onChange={(v: string) => setForm({ ...form, from_date: v })} />
         <Field label="To" icon="calendar" type="date" value={form.to_date} onChange={(v: string) => setForm({ ...form, to_date: v })} />
@@ -992,7 +1076,7 @@ function Leave({ data, caps, flash, reload, me }: any) {
       return <div className="qrow" key={l.name}>
         <div className="qa"><Ic name={kind === "ok" ? "check" : kind === "err" ? "close" : "clock"} /></div>
         <div className="qt"><strong>{l.leave_type}{l.half_day ? " · Half day" : ""}</strong><span>{fmtDMY(l.from_date)} → {fmtDMY(l.to_date)}</span></div>
-        {["Approved", "Rejected", "Cancelled"].includes(st) ? <Chip kind={kind}>{st}</Chip>
+        {/approved|reject|cancel/i.test(st) ? <Chip kind={kind}>{st}</Chip>
           : <button className="btn danger sm" style={{ width: "auto", padding: "0 12px" }} type="button" disabled={isAnyBusy} onClick={() => cancelLeave(l.name)}>{isBusy(`cancel-${l.name}`) ? "…" : "Cancel"}</button>}
       </div>;
     }) : <div className="empty"><h3>No requests</h3><p>No leave requests yet.</p></div>}
@@ -1279,7 +1363,7 @@ function LeaveApproval({ leaves, flash, reload }: any) {
           <Chip kind="pend">{st}</Chip>
         </div>
         <div style={{ display: "flex", gap: 9, marginTop: 12 }}>
-          <button className="btn ok sm" style={{ flex: 1 }} type="button" disabled={isAnyBusy} onClick={() => decide(l.name, true)}><Ic name="check" /> {isBusy(`approve-${l.name}`) ? "…" : st === "Pending Admin Approval" ? "Final approve" : "Approve"}</button>
+          <button className="btn ok sm" style={{ flex: 1 }} type="button" disabled={isAnyBusy} onClick={() => decide(l.name, true)}><Ic name="check" /> {isBusy(`approve-${l.name}`) ? "…" : (st === "Pending HR Approval" || st === "Pending Admin Approval") ? "Final approve" : "Approve"}</button>
           <button className="btn danger sm" style={{ flex: 1 }} type="button" disabled={isAnyBusy} onClick={() => decide(l.name, false)}><Ic name="close" /> {isBusy(`reject-${l.name}`) ? "…" : "Reject"}</button>
         </div>
       </div>;

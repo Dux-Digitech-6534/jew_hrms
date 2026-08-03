@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 import frappe
 from frappe import _
 from frappe.auth import LoginManager
-from frappe.utils import add_days, add_to_date, date_diff, get_datetime, get_system_timezone, getdate, now_datetime, today
+from frappe.utils import add_days, add_to_date, date_diff, flt, get_datetime, get_system_timezone, getdate, now_datetime, today
 from frappe.utils.file_manager import save_file
 
 from jew_hrms_mobile.face_service import (
@@ -37,12 +37,26 @@ REQUIRED_LEAVE_TYPES = {
 }
 APPROVAL_STATUSES = {
 	"draft": "Draft",
+	"pending_dept_head": "Pending Department Head Approval",
+	"pending_md": "Pending MD Approval",
 	"pending_hr": "Pending HR Approval",
-	"pending_admin": "Pending Admin Approval",
+	"pending_admin": "Pending Admin Approval",  # legacy alias (older leaves), treated as HR-final
 	"approved": "Approved",
 	"rejected": "Rejected",
+	"rejected_dept_head": "Rejected by Department Head",
+	"rejected_md": "Rejected by MD",
+	"rejected_hr": "Rejected by HR",
 	"cancelled": "Cancelled",
 }
+# current_approval_level field values
+LEAVE_LEVELS = {
+	"not_started": "Not Started", "dept_head": "Department Head", "md": "MD",
+	"hr": "HR", "completed": "Completed", "rejected": "Rejected", "cancelled": "Cancelled",
+}
+# Leave stuck at MD longer than this many days auto-advances to HR (scheduler).
+OWNER_AUTO_APPROVE_DAYS = 3
+# leave_email_action.py (www) imports this; email-link approval is disabled (app/Desk only).
+EMAIL_ACTION_TOKEN_VALIDITY_DAYS = 3
 POLICY_ACTIONS = {"Warn Only", "Regularization Required", "Mark Half Day", "Mark LWP", "Block Attendance"}
 
 
@@ -810,7 +824,7 @@ def capabilities():
 		"can_apply_leave": has_employee,
 		"can_register_face": is_admin,
 		"can_manage_locations": is_admin,
-		"can_approve_leave": is_approver and _can_access_admin(),
+		"can_approve_leave": (is_approver and _can_access_admin()) or _is_any_dept_head(),
 		"can_view_admin": _can_access_admin(),
 		"can_manage_leave_policy": is_admin or is_hr,
 		"can_manage_shift_policy": is_admin or is_hr,
@@ -1012,16 +1026,18 @@ def mark_attendance(type=None, image_data=None, latitude=None, longitude=None, a
 
 
 @frappe.whitelist()
-def get_attendance_history(from_date=None, to_date=None, limit=60):
+def get_attendance_history(from_date=None, to_date=None, limit=500):
 	employee = _get_current_employee()
 	to_date = getdate(to_date or today())
-	from_date = getdate(from_date or add_days(to_date, -30))
+	# Default to the CURRENT MONTH (1st → today) when no explicit range is given;
+	# the mobile app passes an explicit from/to when the user picks a period.
+	from_date = getdate(from_date) if from_date else to_date.replace(day=1)
 	checkins = frappe.get_list(
 		"Employee Checkin",
 		filters={"employee": employee.name, "time": ["between", [f"{from_date} 00:00:00", f"{to_date} 23:59:59"]]},
 		fields=["name", "time", "log_type"],
 		order_by="time desc",
-		limit_page_length=int(limit or 60),
+		limit_page_length=int(limit or 500),
 		ignore_permissions=True,
 	)
 	attendance = frappe.get_list(
@@ -1165,12 +1181,92 @@ def get_employee_locations(employee=None):
 	return _ok({"employee": doc.name, "locations": _assigned_locations(doc.name)})
 
 
+def _desk_allowed_leave_types():
+	"""Leave Type names allowed by the Desk Leave Application's `leave_type`
+	link_filters Property Setter, so the mobile picker mirrors the Desk EXACTLY
+	(currently Casual Leave / Privilege Leave / Leave Without Pay). Returns a set
+	of names, or None if no such filter is configured (then all types show)."""
+	try:
+		val = frappe.db.get_value(
+			"Property Setter",
+			{"doc_type": "Leave Application", "field_name": "leave_type", "property": "link_filters"},
+			"value",
+		)
+		if not val:
+			return None
+		allowed = set()
+		for f in json.loads(val):
+			# f like ["Leave Type", "name", "in", ["Casual Leave", ...]]
+			if len(f) >= 4 and str(f[1]) == "name" and str(f[2]).lower() == "in" and isinstance(f[3], (list, tuple)):
+				allowed.update(f[3])
+		return allowed or None
+	except Exception:
+		return None
+
+
+def _employee_selectable_leave_types(employee):
+	"""Leave Types an employee can pick, mirroring the Desk Leave Application's
+	leave_type link field (restricted to the Desk's link_filters when configured).
+	Each row is annotated for the mobile picker:
+	  * allocated types carry the live remaining balance (get_leave_balance_on),
+	  * unlimited (is_lwp) types are flagged (no allocation needed), and
+	  * the rest are flagged has_allocation=False (selectable, but the backend will
+	    reject on submit with a clear "allocation not found" message).
+	Ordered allocated-first, then unlimited, then the rest. `balances` (used for the
+	summary cards) holds only the allocated types. Returns (balances, selectable)."""
+	day = getdate(today())
+	allowed = _desk_allowed_leave_types()
+	try:
+		from hrms.hr.doctype.leave_application.leave_application import get_leave_balance_on
+	except Exception:
+		get_leave_balance_on = None
+	allocations = frappe.get_list(
+		"Leave Allocation",
+		filters={"employee": employee, "docstatus": 1, "from_date": ["<=", day], "to_date": [">=", day]},
+		fields=["leave_type", "total_leaves_allocated"],
+		ignore_permissions=True,
+	)
+	alloc_totals = {}
+	for a in allocations:
+		alloc_totals[a.leave_type] = flt(alloc_totals.get(a.leave_type, 0)) + flt(a.total_leaves_allocated)
+	balances = []
+	selectable = []
+	for t in frappe.get_all("Leave Type", fields=["name", "leave_type_name", "is_lwp"], order_by="name asc"):
+		if allowed is not None and t.name not in allowed:
+			continue
+		lt = t.name
+		is_lwp = int(t.is_lwp or 0)
+		has_alloc = lt in alloc_totals
+		# Use each type's own name (NOT the REQUIRED_LEAVE_TYPES display remap) so
+		# the duplicate short-code records (CL / PL) stay visually distinct from the
+		# full-name types instead of masquerading as them with the same label.
+		lt_name = t.leave_type_name or lt
+		allocated = flt(alloc_totals[lt]) if has_alloc else None
+		balance = None
+		if has_alloc:
+			balance = allocated
+			if get_leave_balance_on:
+				try:
+					balance = flt(get_leave_balance_on(employee, lt, day))
+				except Exception:
+					balance = allocated
+			balances.append({"leave_type": lt, "leave_type_name": lt_name, "total_leaves_allocated": allocated, "unused_leaves": balance, "balance": balance})
+		selectable.append({
+			"leave_type": lt, "leave_type_name": lt_name, "is_lwp": is_lwp,
+			"allocated": allocated, "balance": balance,
+			"unlimited": bool(is_lwp), "has_allocation": has_alloc,
+		})
+	rank = lambda r: (0 if r["has_allocation"] else 1 if r["unlimited"] else 2, r["leave_type_name"])
+	selectable.sort(key=rank)
+	return balances, selectable
+
+
 @frappe.whitelist()
 def get_leave_dashboard():
 	employee = _get_current_employee()
-	allocations = frappe.get_list("Leave Allocation", filters={"employee": employee.name, "docstatus": 1, "to_date": [">=", today()]}, fields=["leave_type", "total_leaves_allocated", "unused_leaves"], ignore_permissions=True)
+	balances, selectable = _employee_selectable_leave_types(employee.name)
 	recent = get_my_leaves(limit=5).get("leaves", [])
-	return _ok({"balances": allocations, "recent": recent})
+	return _ok({"balances": balances, "selectable_types": selectable, "recent": recent})
 
 
 @frappe.whitelist()
@@ -1251,7 +1347,7 @@ def _send_leave_apply_mail(doc, employee_doc):
 		recipients = _leave_approver_emails()
 		if not recipients:
 			return
-		link = frappe.utils.get_url() + "/app/leave-application/" + doc.name
+		link = frappe.utils.get_url() + "/jew-hrms/m"
 		days = "0.5 (Half Day)" if int(doc.get("half_day") or 0) else str(frappe.utils.date_diff(doc.to_date, doc.from_date) + 1)
 		subject = "Leave request: {0} ({1})".format(employee_doc.employee_name, doc.leave_type)
 		message = (
@@ -1264,7 +1360,7 @@ def _send_leave_apply_mail(doc, employee_doc):
 			"<tr><td><b>Days</b></td><td>{days}</td></tr>"
 			"<tr><td><b>Reason</b></td><td>{reason}</td></tr>"
 			"</table>"
-			"<p><a href='{link}'>Open in ERP to approve / reject</a></p>"
+			"<p><a href='{link}'>Open the JEW HRMS app to approve / reject</a></p>"
 		).format(
 			emp=frappe.utils.escape_html(employee_doc.employee_name or ""), lt=frappe.utils.escape_html(doc.leave_type or ""),
 			fr=frappe.utils.formatdate(doc.from_date), to=frappe.utils.formatdate(doc.to_date),
@@ -1274,6 +1370,368 @@ def _send_leave_apply_mail(doc, employee_doc):
 		                reference_doctype="Leave Application", reference_name=doc.name)
 	except Exception:
 		frappe.log_error(frappe.get_traceback(), "JEW HRMS leave apply mail failed")
+
+
+# ── Multi-stage leave approval workflow ─────────────────────────────────────
+# Flow: apply → Department Head → MD → HR (final) → Approved. The Department Head
+# stage is skipped when the employee's `custom_reports_direct_to_owner` is set or
+# no `custom_dept_head_email` is configured. MD stage auto-advances to HR after
+# OWNER_AUTO_APPROVE_DAYS. Emails are TARGETED (applicant + the one next approver),
+# never blasted to every approver-role holder.
+
+def _employee_dept_head_email(employee_doc):
+	email = (employee_doc.get("custom_dept_head_email") or "").strip()
+	return email if email and "@" in email else None
+
+
+def _initial_leave_stage(employee_doc):
+	"""(status, level) for a brand-new leave: Department Head unless the employee
+	reports direct to owner or has no dept head configured (then straight to MD)."""
+	skip = _bool(employee_doc.get("custom_reports_direct_to_owner"))
+	if not skip and _employee_dept_head_email(employee_doc):
+		return APPROVAL_STATUSES["pending_dept_head"], LEAVE_LEVELS["dept_head"]
+	return APPROVAL_STATUSES["pending_md"], LEAVE_LEVELS["md"]
+
+
+def _role_emails(*role_names):
+	users = set()
+	for role in role_names:
+		for u in frappe.get_all("Has Role", filters={"role": role, "parenttype": "User"}, pluck="parent"):
+			users.add(u)
+	emails = []
+	for u in users:
+		if u in ("Administrator", "Guest"):
+			continue
+		info = frappe.db.get_value("User", u, ["email", "enabled"], as_dict=True)
+		if info and info.enabled and info.email and "@" in info.email:
+			emails.append(info.email)
+	return sorted(set(emails))
+
+
+def _md_emails():
+	return _role_emails("JEW HRMS Owner")
+
+
+def _hr_emails():
+	return _role_emails("JEW HRMS HR")
+
+
+def _applicant_email(employee_doc):
+	for f in ("user_id", "personal_email", "company_email", "prefered_email"):
+		v = employee_doc.get(f)
+		if v and "@" in v:
+			return v
+	return None
+
+
+def _stage_approver_emails(status, employee_doc):
+	"""The single next-approver recipient list for a pending status."""
+	if status == APPROVAL_STATUSES["pending_dept_head"]:
+		e = _employee_dept_head_email(employee_doc)
+		return [e] if e else _md_emails()
+	if status == APPROVAL_STATUSES["pending_md"]:
+		return _md_emails()
+	if status in (APPROVAL_STATUSES["pending_hr"], APPROVAL_STATUSES["pending_admin"]):
+		return _hr_emails()
+	return []
+
+
+def _is_dept_head_of(user, employee_doc):
+	dh = _employee_dept_head_email(employee_doc)
+	if not dh:
+		return False
+	if (user or "").lower() == dh.lower():
+		return True
+	uemail = frappe.db.get_value("User", user, "email")
+	return bool(uemail and uemail.lower() == dh.lower())
+
+
+def _user_display_name(user):
+	"""Also imported by www/leave_email_action.py."""
+	if not user:
+		return "-"
+	return frappe.db.get_value("User", user, "full_name") or user
+
+
+def _stage_user_for_role(role):
+	for u in frappe.get_all("Has Role", filters={"role": role, "parenttype": "User"}, pluck="parent"):
+		if u not in ("Administrator", "Guest"):
+			return u
+	return None
+
+
+def _stage_approver_user(status, employee_doc):
+	"""The single approver USER for a pending stage (dept head = configured email;
+	MD = JEW HRMS Owner holder; HR = JEW HRMS HR holder)."""
+	if status == APPROVAL_STATUSES["pending_dept_head"]:
+		return _employee_dept_head_email(employee_doc)
+	if status == APPROVAL_STATUSES["pending_md"]:
+		return _stage_user_for_role("JEW HRMS Owner")
+	if status in (APPROVAL_STATUSES["pending_hr"], APPROVAL_STATUSES["pending_admin"]):
+		return _stage_user_for_role("JEW HRMS HR")
+	return None
+
+
+def _generate_email_action_token(doc, user):
+	"""Issue a single-use, expiring, stage-locked email-action token bound to the
+	doc's CURRENT stage + the intended approver. Overwrites any previous token (so an
+	old-stage link can no longer be used). Persisted without firing hooks."""
+	token = frappe.generate_hash(length=48)
+	frappe.db.set_value("Leave Application", doc.name, {
+		"email_action_token": token,
+		"email_action_token_user": user or "",
+		"email_action_token_stage": doc.get("jew_hrms_approval_status"),
+		"email_action_token_expiry": add_to_date(now_datetime(), days=EMAIL_ACTION_TOKEN_VALIDITY_DAYS),
+	}, update_modified=False)
+	return token
+
+
+def _validate_email_action_token(token, action):
+	"""Validate an email-action token. Returns (doc, None) or (None, error_message).
+	For approve/reject the token must still match the doc's CURRENT stage and the doc
+	must not be finalised; view is lenient. Imported by www/leave_email_action.py."""
+	if not token:
+		return None, "Invalid or missing action link."
+	name = frappe.db.get_value("Leave Application", {"email_action_token": token}, "name")
+	if not name:
+		return None, "This link is no longer valid — it may have already been used or superseded."
+	doc = frappe.get_doc("Leave Application", name)
+	expiry = doc.get("email_action_token_expiry")
+	if expiry and get_datetime(expiry) < now_datetime():
+		return None, "This action link has expired."
+	if action in ("approve", "reject"):
+		if doc.docstatus != 0 or str(doc.status) in ("Approved", "Rejected", "Cancelled"):
+			return None, "This leave application has already been finalised."
+		stage = doc.get("email_action_token_stage")
+		if stage and stage != doc.get("jew_hrms_approval_status"):
+			return None, "This leave application has already moved to the next stage."
+	return doc, None
+
+
+def _leave_email_context(doc, employee_doc):
+	"""Common Jinja context for the Leave Email Templates (patches/jew_hrms_leave_md_workflow.py)."""
+	if int(doc.get("half_day") or 0):
+		total_days = "0.5"
+	else:
+		total_days = doc.get("total_leave_days") or (frappe.utils.date_diff(doc.to_date, doc.from_date) + 1)
+	dh_email = _employee_dept_head_email(employee_doc)
+	return {
+		"employee_name": employee_doc.employee_name or employee_doc.name,
+		"employee_id": employee_doc.name,
+		"department": employee_doc.get("department") or "-",
+		"leave_type": doc.leave_type,
+		"from_date": frappe.utils.formatdate(doc.from_date),
+		"to_date": frappe.utils.formatdate(doc.to_date),
+		"total_leave_days": total_days,
+		"leave_reason": doc.get("description") or "-",
+		"leave_application_id": doc.name,
+		"company_name": doc.get("company") or employee_doc.get("company") or "Jain Engineering Works (India) Private Limited",
+		"department_head_name": _user_display_name(dh_email) if dh_email else "-",
+		"md_name": _user_display_name(_stage_user_for_role("JEW HRMS Owner")),
+		"hr_approver_name": _user_display_name(_stage_user_for_role("JEW HRMS HR")),
+		"department_head_approval_date": frappe.utils.format_datetime(doc.get("dept_head_approved_on")) if doc.get("dept_head_approved_on") else "-",
+		"leave_application_link": frappe.utils.get_url() + "/jew-hrms/m",
+		"approve_link": "", "reject_link": "",
+	}
+
+
+def _send_template_email(recipients, template_name, ctx, doc):
+	"""Render a Leave Email Template by name with ctx and send it. Best-effort."""
+	recipients = sorted({r for r in (recipients or []) if r and "@" in r})
+	if not recipients:
+		return
+	try:
+		tmpl = frappe.db.get_value("Email Template", template_name, ["subject", "response"], as_dict=True)
+		if not tmpl:
+			return
+		subject = frappe.render_template(tmpl.subject, ctx)
+		message = frappe.render_template(tmpl.response, ctx)
+		frappe.sendmail(recipients=recipients, subject=subject, message=message,
+		                reference_doctype="Leave Application", reference_name=doc.name)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "JEW HRMS template email failed ({0})".format(template_name))
+
+
+def _send_stage_request_email(doc, employee_doc, status, ctx):
+	"""Email the approver for `status` with one-click Approve/Reject/View token links."""
+	recipients = _stage_approver_emails(status, employee_doc)
+	if not recipients:
+		return
+	token = _generate_email_action_token(doc, _stage_approver_user(status, employee_doc))
+	site = frappe.utils.get_url()
+	c = dict(ctx)
+	c["approve_link"] = "{0}/leave_email_action?token={1}&action=approve".format(site, token)
+	c["reject_link"] = "{0}/leave_email_action?token={1}&action=reject".format(site, token)
+	c["leave_application_link"] = "{0}/leave_email_action?token={1}&action=view".format(site, token)
+	tmpl = {
+		APPROVAL_STATUSES["pending_dept_head"]: "Leave - Dept Head Approval Request",
+		APPROVAL_STATUSES["pending_md"]: "Leave - MD Approval Request",
+		APPROVAL_STATUSES["pending_hr"]: "Leave - HR Final Approval Request",
+		APPROVAL_STATUSES["pending_admin"]: "Leave - HR Final Approval Request",
+	}.get(status)
+	if tmpl:
+		_send_template_email(recipients, tmpl, c, doc)
+
+
+def _notify_stage_advance(doc, employee_doc, level_label, approver_name, next_status):
+	"""After a stage is approved: notify the applicant + email the next approver (with buttons)."""
+	ctx = _leave_email_context(doc, employee_doc)
+	appl = _applicant_email(employee_doc)
+	if appl:
+		if level_label == "Department Head":
+			_send_template_email([appl], "Leave - Employee Notified After Dept Head Approval", ctx, doc)
+		elif level_label == "MD":
+			_send_template_email([appl], "Leave - Employee Notified After MD Approval", ctx, doc)
+	_send_stage_request_email(doc, employee_doc, next_status, ctx)
+	_safe_insert_notification(doc.employee, "Leave approved by {0}".format(level_label),
+	                          "Now {0}.".format(next_status), "Info", "Leave Application", doc.name)
+
+
+def _notify_final_approval(doc, employee_doc, approver_name):
+	ctx = _leave_email_context(doc, employee_doc)
+	appl = _applicant_email(employee_doc)
+	if appl:
+		_send_template_email([appl], "Leave - Employee Final Approval", ctx, doc)
+	_safe_insert_notification(doc.employee, "Leave approved", "Your leave request is approved.", "Info", "Leave Application", doc.name)
+
+
+def _notify_rejection(doc, employee_doc, level_label, remarks):
+	ctx = _leave_email_context(doc, employee_doc)
+	ctx.update({
+		"rejection_level": level_label,
+		"rejected_by_name": _user_display_name(doc.get("rejected_by") or frappe.session.user),
+		"rejection_date": frappe.utils.format_datetime(doc.get("rejection_date")) if doc.get("rejection_date") else frappe.utils.format_datetime(now_datetime()),
+		"rejection_reason": remarks or "-",
+		"rejection_status": doc.get("jew_hrms_approval_status") or "Rejected",
+	})
+	appl = _applicant_email(employee_doc)
+	if appl:
+		_send_template_email([appl], "Leave - Employee Rejection", ctx, doc)
+	_safe_insert_notification(doc.employee, "Leave rejected", remarks, "Warning", "Leave Application", doc.name)
+
+
+@frappe.whitelist(allow_guest=True)
+def confirm_leave_email_action(token=None, action=None, remarks=None, csrf_token=None):
+	"""POST target of the leave_email_action page (one-click email Approve/Reject).
+	Runs as the token's intended approver, reusing approve_leave/reject_leave (so the
+	full stage machine + next-stage emails fire). Redirects back to a result page."""
+	from urllib.parse import urlencode
+	def _redirect(**params):
+		frappe.local.response["type"] = "redirect"
+		frappe.local.response["location"] = "/leave_email_action?" + urlencode({k: v for k, v in params.items() if v not in (None, "")})
+	doc, error = _validate_email_action_token(token, action)
+	if not doc:
+		return _redirect(done=1, ok=0, msg=error or "This link is not valid.")
+	if action == "reject" and not (remarks and str(remarks).strip()):
+		return _redirect(action="reject", token=token, missing_remarks=1)
+	acting_user = doc.get("email_action_token_user") or frappe.session.user
+	orig_user = frappe.session.user
+	try:
+		frappe.set_user(acting_user)
+		if action == "approve":
+			res = approve_leave(name=doc.name)
+		elif action == "reject":
+			res = reject_leave(name=doc.name, remarks=remarks)
+		else:
+			res = {"ok": False, "message": "Unknown action."}
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "JEW HRMS confirm_leave_email_action failed")
+		res = {"ok": False, "message": "Could not complete this action."}
+	finally:
+		frappe.set_user(orig_user)
+	ok = bool(res.get("ok"))
+	return _redirect(done=1, ok=1 if ok else 0, msg=res.get("message") or ("Done." if ok else "Could not complete this action."))
+
+
+def set_initial_leave_approval_stage(doc, method=None):
+	"""before_insert hook (hooks.py): stamp the initial approval stage (Department
+	Head, or MD when dept-head is skipped) on a new Leave Application. Idempotent —
+	apply_leave pre-sets it for mobile leaves; this covers Desk-created ones too.
+	Best-effort: never blocks the insert."""
+	try:
+		if not doc.meta.has_field("jew_hrms_approval_status"):
+			return
+		current = doc.get("jew_hrms_approval_status")
+		if not current or current == APPROVAL_STATUSES.get("draft"):
+			emp = frappe.get_doc("Employee", doc.employee) if doc.get("employee") else None
+			status, level = _initial_leave_stage(emp) if emp else (APPROVAL_STATUSES["pending_md"], LEAVE_LEVELS["md"])
+			doc.jew_hrms_approval_status = status
+			_set_if_has(doc, "current_approval_level", level)
+			if status == APPROVAL_STATUSES["pending_md"]:
+				_set_if_has(doc, "owner_stage_started_on", now_datetime())
+		if not doc.get("status"):
+			doc.status = "Open"
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "JEW HRMS set_initial_leave_approval_stage failed")
+
+
+def send_initial_leave_stage_email(doc, method=None):
+	"""after_insert hook (hooks.py): email the APPLICANT (submission confirmation) +
+	the first-stage approver (Dept Head or MD) with one-click Approve/Reject buttons,
+	using the Leave Email Templates. Best-effort — never breaks insert."""
+	try:
+		if not doc.get("employee"):
+			return
+		employee_doc = frappe.get_doc("Employee", doc.employee)
+		status = _leave_approval_status(doc)
+		ctx = _leave_email_context(doc, employee_doc)
+		appl = _applicant_email(employee_doc)
+		if appl:
+			_send_template_email([appl], "Leave - Employee Submission Confirmation", ctx, doc)
+		_send_stage_request_email(doc, employee_doc, status, ctx)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "JEW HRMS send_initial_leave_stage_email failed")
+
+
+def sync_approved_leave_to_salary_slip(doc, method=None):
+	"""on_submit hook (hooks.py). Payroll/leave reconciliation is handled by standard
+	HRMS; this stub exists so the hook resolves and leave submission/approval is not
+	blocked. Extend here if a custom Salary Slip sync is required."""
+	return
+
+
+def auto_approve_stale_owner_leaves():
+	"""Daily scheduler hook (hooks.py). Leaves stuck at 'Pending MD Approval' longer
+	than OWNER_AUTO_APPROVE_DAYS auto-advance to HR (flagged owner_auto_approved); HR
+	and the applicant are emailed. Best-effort — one failure doesn't stop the rest."""
+	try:
+		cutoff = add_to_date(now_datetime(), days=-OWNER_AUTO_APPROVE_DAYS)
+		names = frappe.get_all("Leave Application", filters={
+			"jew_hrms_approval_status": APPROVAL_STATUSES["pending_md"], "docstatus": 0,
+		}, pluck="name")
+		for nm in names:
+			try:
+				doc = frappe.get_doc("Leave Application", nm)
+				started = doc.get("owner_stage_started_on")
+				if not started:
+					# Old leaves that reached MD before this field was tracked: stamp
+					# now and give them the full window instead of auto-advancing today.
+					_set_if_has(doc, "owner_stage_started_on", now_datetime())
+					doc.save(ignore_permissions=True)
+					frappe.db.commit()
+					continue
+				if get_datetime(started) > cutoff:
+					continue  # not stale yet
+				employee_doc = frappe.get_doc("Employee", doc.employee)
+				_set_if_has(doc, "owner_auto_approved", 1)
+				_set_if_has(doc, "owner_approved_on", now_datetime())
+				doc.jew_hrms_approval_status = APPROVAL_STATUSES["pending_hr"]
+				_set_if_has(doc, "current_approval_level", LEAVE_LEVELS["hr"])
+				doc.status = "Open"
+				doc.save(ignore_permissions=True)
+				# Notify HR (with one-click buttons) + the applicant, via the templates.
+				ctx = _leave_email_context(doc, employee_doc)
+				appl = _applicant_email(employee_doc)
+				if appl:
+					_send_template_email([appl], "Leave - Employee Notified After MD Approval", ctx, doc)
+				_send_stage_request_email(doc, employee_doc, APPROVAL_STATUSES["pending_hr"], ctx)
+				_safe_insert_notification(doc.employee, "Leave forwarded to HR", "MD did not act in time; pending HR.", "Info", "Leave Application", doc.name)
+				frappe.db.commit()
+			except Exception:
+				frappe.db.rollback()
+				frappe.log_error(frappe.get_traceback(), "JEW HRMS auto-approve one leave failed")
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "JEW HRMS auto_approve_stale_owner_leaves failed")
 
 
 @frappe.whitelist()
@@ -1332,19 +1790,36 @@ def apply_leave(employee=None, leave_type=None, from_date=None, to_date=None, ha
 		doc.description = reason
 		doc.status = "Open"
 		if doc.meta.has_field("jew_hrms_approval_status"):
-			doc.jew_hrms_approval_status = APPROVAL_STATUSES["pending_admin"] if _is_owner() else APPROVAL_STATUSES["pending_hr"]
+			init_status, init_level = _initial_leave_stage(employee_doc)
+			doc.jew_hrms_approval_status = init_status
+			_set_if_has(doc, "current_approval_level", init_level)
+			if init_status == APPROVAL_STATUSES["pending_md"]:
+				_set_if_has(doc, "owner_stage_started_on", now_datetime())
 		doc.insert(ignore_permissions=True)
 		if attachment and doc.meta.has_field("attachment"):
 			doc.attachment = attachment
 			doc.save(ignore_permissions=True)
 		_safe_insert_notification(employee_doc.name, "Leave submitted", f"{leave_type} leave is pending approval.", "Info", "Leave Application", doc.name)
-		_send_leave_apply_mail(doc, employee_doc)
+		# Approver email is sent by the after_insert hook (send_initial_leave_stage_email)
+		# during doc.insert() above — no explicit call here (avoids a duplicate email).
 		message = "Leave request submitted successfully."
 		frappe.db.commit()
 		return _ok({"name": doc.name, "leave_application": doc.name, "docstatus": doc.docstatus, "approval_status": _leave_approval_status(doc)}, message)
 	except frappe.PermissionError:
 		frappe.db.rollback()
 		return _fail("You do not have permission.", "permission_denied")
+	except frappe.ValidationError as exc:
+		# HRMS raises clean, user-facing messages here (insufficient balance,
+		# holiday/overlap conflicts, etc.). Surface them instead of the generic
+		# fallback so employees know exactly why the leave was rejected.
+		frappe.db.rollback()
+		clean = frappe.utils.strip_html(str(exc) or "").strip()
+		low = clean.lower()
+		if "allocation" in low:
+			return _fail("Leave allocation not found. Please contact HR.", "leave_allocation_not_found")
+		if "balance" in low or "not enough" in low:
+			return _fail(clean or "Insufficient leave balance for this leave type.", "insufficient_balance")
+		return _fail(clean or "Unable to submit leave. Please contact HR.", "validation_error")
 	except Exception as exc:
 		frappe.db.rollback()
 		text = str(exc)
@@ -1388,67 +1863,181 @@ def cancel_leave(name=None):
 
 @frappe.whitelist()
 def get_pending_leaves():
-	_require_approver()
-	if _is_owner():
-		filters = {"jew_hrms_approval_status": APPROVAL_STATUSES["pending_admin"]} if _approval_field_exists() else {"status": "Open"}
-	elif _is_hr():
-		filters = {"jew_hrms_approval_status": APPROVAL_STATUSES["pending_hr"]} if _approval_field_exists() else {"status": "Open"}
-	else:
-		filters = {"status": "Open"}
-	fields = ["name", "employee", "employee_name", "leave_type", "from_date", "to_date", "description", "status", "half_day"]
-	if _approval_field_exists():
-		fields.extend(["jew_hrms_approval_status", "reject_reason"])
-	leaves = frappe.get_list("Leave Application", filters=filters, fields=fields, order_by="from_date asc", limit_page_length=100)
-	for leave in leaves:
-		leave.approval_status = leave.get("jew_hrms_approval_status") or leave.status
-	return _ok({"leaves": leaves})
+	"""Pending leaves the CURRENT user may actually act on (strict — see
+	_leave_stage_actor): a dept head sees only their own employees' dept-head-stage
+	leaves; MD (Aditya) sees MD-stage; HR (Kavita) sees HR-stage."""
+	_require_login()
+	user = frappe.session.user
+	fields = ["name", "employee", "employee_name", "leave_type", "from_date", "to_date",
+	          "description", "status", "half_day", "jew_hrms_approval_status", "current_approval_level", "reject_reason"]
+	pending = [APPROVAL_STATUSES["pending_dept_head"], APPROVAL_STATUSES["pending_md"],
+	           APPROVAL_STATUSES["pending_hr"], APPROVAL_STATUSES["pending_admin"]]
+	rows = frappe.get_all("Leave Application", filters={"jew_hrms_approval_status": ["in", pending], "docstatus": 0},
+	                      fields=fields, order_by="from_date asc", limit_page_length=0, ignore_permissions=True)
+	result = []
+	for r in rows:
+		emp = frappe.get_doc("Employee", r.employee) if r.get("employee") else None
+		if _leave_stage_actor(r.get("jew_hrms_approval_status"), user, emp):
+			r["approval_status"] = r.get("jew_hrms_approval_status") or r.status
+			result.append(r)
+	return _ok({"leaves": result})
+
+
+def _is_workflow_md(user=None):
+	"""MD approver = holds the JEW HRMS Owner role ONLY (tight — not the broad
+	OWNER_ROLES which also matches System Manager). Trimmed to a single MD."""
+	return "JEW HRMS Owner" in _roles(user)
+
+
+def _is_workflow_hr(user=None):
+	"""HR approver = holds the JEW HRMS HR role ONLY (tight — not the broad HR_ROLES
+	which also matches HR Manager / HR User / Leave Approver)."""
+	return "JEW HRMS HR" in _roles(user)
+
+
+def _is_any_dept_head(user=None):
+	"""True if this user is the configured department head (custom_dept_head_email) of
+	any active employee — used to grant leave-approval access in the app to dept heads
+	who hold no JEW HRMS approver role."""
+	u = user or frappe.session.user
+	if not u or u in ("Guest",):
+		return False
+	email = frappe.db.get_value("User", u, "email") or u
+	return bool(
+		frappe.db.exists("Employee", {"status": "Active", "custom_dept_head_email": email})
+		or (email != u and frappe.db.exists("Employee", {"status": "Active", "custom_dept_head_email": u}))
+	)
+
+
+def _leave_stage_actor(status, user, employee_doc):
+	"""Return (level_label, is_final) if `user` may act on `status`, else None. STRICT:
+	dept-head stage → only that employee's configured dept head; MD stage → only the
+	JEW HRMS Owner (Aditya); HR stage → only the JEW HRMS HR (Kavita). A super-admin can
+	still edit the doc directly in Desk if a stage is ever stuck."""
+	if status == APPROVAL_STATUSES["pending_dept_head"] and employee_doc and _is_dept_head_of(user, employee_doc):
+		return "Department Head", False
+	if status == APPROVAL_STATUSES["pending_md"] and _is_workflow_md(user):
+		return "MD", False
+	if status in (APPROVAL_STATUSES["pending_hr"], APPROVAL_STATUSES["pending_admin"]) and _is_workflow_hr(user):
+		return "HR", True
+	return None
+
+
+@frappe.whitelist()
+def can_i_approve_this_leave(name=None):
+	"""Desk 'Leave Application Stage Approval Buttons' client script uses this to show
+	Approve/Reject buttons. Returns {can_approve, stage}. NEVER throws for a
+	non-approver (that would surface as a Desk error popup)."""
+	try:
+		if not name or not frappe.db.exists("Leave Application", name):
+			return {"can_approve": False}
+		doc = frappe.get_doc("Leave Application", name)
+		if doc.docstatus != 0:
+			return {"can_approve": False}
+		status = _leave_approval_status(doc)
+		employee_doc = frappe.get_doc("Employee", doc.employee) if doc.get("employee") else None
+		actor = _leave_stage_actor(status, frappe.session.user, employee_doc)
+		return {"can_approve": bool(actor), "stage": status}
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "JEW HRMS can_i_approve_this_leave failed")
+		return {"can_approve": False}
 
 
 @frappe.whitelist()
 def approve_leave(name=None, remarks=None):
-	_require_approver()
+	"""Advance a leave one stage: Dept Head → MD → HR (final) → Approved. The acting
+	user must be authorised for the CURRENT stage. Emails the applicant (who approved)
+	and the next approver only."""
+	_require_login()
 	doc = frappe.get_doc("Leave Application", name)
-	current_status = _leave_approval_status(doc)
-	if current_status == APPROVAL_STATUSES["pending_hr"] and _is_hr():
-		_set_if_has(doc, "jew_hrms_approval_status", APPROVAL_STATUSES["pending_admin"])
-		_set_if_has(doc, "hr_approved_by", frappe.session.user)
-		_set_if_has(doc, "hr_approved_on", now_datetime())
+	status = _leave_approval_status(doc)
+	if doc.docstatus == 2 or status in (APPROVAL_STATUSES["approved"], APPROVAL_STATUSES["cancelled"]) or str(doc.status) in ("Approved", "Cancelled", "Rejected"):
+		return _fail("This leave is already finalised.", "already_finalised")
+	employee_doc = frappe.get_doc("Employee", doc.employee)
+	user = frappe.session.user
+	actor = _leave_stage_actor(status, user, employee_doc)
+	if not actor:
+		return _fail("You cannot approve this leave at its current stage.", "permission_denied")
+	level_label, is_final = actor
+	approver_name = _user_display_name(user)
+	if level_label == "Department Head":
+		_set_if_has(doc, "dept_head_approved_by", user)
+		_set_if_has(doc, "dept_head_approved_on", now_datetime())
+		if remarks:
+			_set_if_has(doc, "dept_head_approval_remarks", remarks)
+		doc.jew_hrms_approval_status = APPROVAL_STATUSES["pending_md"]
+		_set_if_has(doc, "current_approval_level", LEAVE_LEVELS["md"])
+		_set_if_has(doc, "owner_stage_started_on", now_datetime())
 		doc.status = "Open"
 		doc.save(ignore_permissions=True)
-		_safe_insert_notification(doc.employee, "Leave approved by HR", "Pending admin final approval.", "Info", "Leave Application", doc.name)
+		_notify_stage_advance(doc, employee_doc, "Department Head", approver_name, APPROVAL_STATUSES["pending_md"])
 		frappe.db.commit()
-		return _ok({"approval_status": APPROVAL_STATUSES["pending_admin"]}, "Leave approved by HR")
-	if current_status in (APPROVAL_STATUSES["pending_admin"], APPROVAL_STATUSES["pending_hr"]) and _is_owner():
-		_set_if_has(doc, "jew_hrms_approval_status", APPROVAL_STATUSES["approved"])
-		_set_if_has(doc, "final_approved_by", frappe.session.user)
-		_set_if_has(doc, "final_approved_on", now_datetime())
-		doc.status = "Approved"
-		try:
-			if doc.docstatus == 0:
-				doc.submit()
-			else:
-				doc.save(ignore_permissions=True)
-		except Exception:
+		return _ok({"approval_status": APPROVAL_STATUSES["pending_md"]}, "Approved by Department Head — pending MD.")
+	if level_label == "MD":
+		_set_if_has(doc, "owner_approved_by", user)
+		_set_if_has(doc, "owner_approved_on", now_datetime())
+		if remarks:
+			_set_if_has(doc, "md_approval_remarks", remarks)
+		doc.jew_hrms_approval_status = APPROVAL_STATUSES["pending_hr"]
+		_set_if_has(doc, "current_approval_level", LEAVE_LEVELS["hr"])
+		doc.status = "Open"
+		doc.save(ignore_permissions=True)
+		_notify_stage_advance(doc, employee_doc, "MD", approver_name, APPROVAL_STATUSES["pending_hr"])
+		frappe.db.commit()
+		return _ok({"approval_status": APPROVAL_STATUSES["pending_hr"]}, "Approved by MD — pending HR.")
+	# HR — final
+	_set_if_has(doc, "hr_approved_by", user)
+	_set_if_has(doc, "hr_approved_on", now_datetime())
+	_set_if_has(doc, "final_approved_by", user)
+	_set_if_has(doc, "final_approved_on", now_datetime())
+	if remarks:
+		_set_if_has(doc, "hr_approval_remarks", remarks)
+	doc.jew_hrms_approval_status = APPROVAL_STATUSES["approved"]
+	_set_if_has(doc, "current_approval_level", LEAVE_LEVELS["completed"])
+	doc.status = "Approved"
+	try:
+		if doc.docstatus == 0:
+			doc.submit()
+		else:
 			doc.save(ignore_permissions=True)
-		_safe_insert_notification(doc.employee, "Leave approved by Admin", "Leave request approved.", "Info", "Leave Application", doc.name)
-		frappe.db.commit()
-		return _ok({"approval_status": APPROVAL_STATUSES["approved"]}, "Leave approved")
-	return _fail("You do not have permission.", "permission_denied")
+	except Exception:
+		doc.save(ignore_permissions=True)
+	_notify_final_approval(doc, employee_doc, approver_name)
+	frappe.db.commit()
+	return _ok({"approval_status": APPROVAL_STATUSES["approved"]}, "Leave approved (final).")
 
 
 @frappe.whitelist()
 def reject_leave(name=None, remarks=None):
-	_require_approver()
+	"""Reject at the current stage. Records rejecting user/level/date + reason, emails
+	the applicant with the reason. Authorised like approve_leave."""
+	_require_login()
 	if not remarks:
 		return _fail("Reject Reason required.", "reject_reason_required")
 	doc = frappe.get_doc("Leave Application", name)
+	status = _leave_approval_status(doc)
+	if doc.docstatus == 2 or status in (APPROVAL_STATUSES["approved"], APPROVAL_STATUSES["cancelled"]) or str(doc.status) in ("Approved", "Cancelled", "Rejected"):
+		return _fail("This leave is already finalised.", "already_finalised")
+	employee_doc = frappe.get_doc("Employee", doc.employee)
+	user = frappe.session.user
+	actor = _leave_stage_actor(status, user, employee_doc)
+	if not actor:
+		return _fail("You cannot reject this leave at its current stage.", "permission_denied")
+	level_label = actor[0]
+	rejected_status = {
+		"Department Head": APPROVAL_STATUSES["rejected_dept_head"],
+		"MD": APPROVAL_STATUSES["rejected_md"],
+		"HR": APPROVAL_STATUSES["rejected_hr"],
+	}.get(level_label, APPROVAL_STATUSES["rejected"])
 	doc.status = "Rejected"
-	_set_if_has(doc, "jew_hrms_approval_status", APPROVAL_STATUSES["rejected"])
+	_set_if_has(doc, "jew_hrms_approval_status", rejected_status)
+	_set_if_has(doc, "current_approval_level", LEAVE_LEVELS["rejected"])
 	_set_if_has(doc, "reject_reason", remarks)
-	if remarks:
-		doc.description = ((doc.description or "") + f"\n\nRejection remarks: {remarks}").strip()
+	_set_if_has(doc, "rejected_by", user)
+	_set_if_has(doc, "rejection_level", level_label)
+	_set_if_has(doc, "rejection_date", now_datetime())
 	doc.save(ignore_permissions=True)
-	_safe_insert_notification(doc.employee, "Leave rejected", remarks, "Warning", "Leave Application", doc.name)
+	_notify_rejection(doc, employee_doc, level_label, remarks)
 	frappe.db.commit()
 	return _ok(message="Leave rejected")
 
