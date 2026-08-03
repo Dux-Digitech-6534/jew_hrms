@@ -57,6 +57,9 @@ LEAVE_LEVELS = {
 OWNER_AUTO_APPROVE_DAYS = 3
 # leave_email_action.py (www) imports this; email-link approval is disabled (app/Desk only).
 EMAIL_ACTION_TOKEN_VALIDITY_DAYS = 3
+# Casual Leave is capped at this many days per calendar month per employee.
+CASUAL_LEAVE_MONTHLY_CAP = 2
+CASUAL_LEAVE_TYPES = ("Casual Leave", "CL")
 POLICY_ACTIONS = {"Warn Only", "Regularization Required", "Mark Half Day", "Mark LWP", "Block Attendance"}
 
 
@@ -1255,6 +1258,8 @@ def _employee_selectable_leave_types(employee):
 			"leave_type": lt, "leave_type_name": lt_name, "is_lwp": is_lwp,
 			"allocated": allocated, "balance": balance,
 			"unlimited": bool(is_lwp), "has_allocation": has_alloc,
+			# Allocated type with 0 (or negative) balance left -> not selectable in the app.
+			"disabled": bool(has_alloc and not is_lwp and (balance is None or balance <= 0)),
 		})
 	rank = lambda r: (0 if r["has_allocation"] else 1 if r["unlimited"] else 2, r["leave_type_name"])
 	selectable.sort(key=rank)
@@ -1323,6 +1328,40 @@ def _has_leave_allocation(employee, leave_type, from_dt, to_dt):
 	if leave_type_doc.get("is_lwp"):
 		return True
 	return bool(frappe.db.exists("Leave Allocation", {"employee": employee, "leave_type": leave_type, "docstatus": 1, "from_date": ["<=", from_dt], "to_date": [">=", to_dt]}))
+
+
+def _check_casual_monthly_cap(employee, leave_type, from_dt, to_dt, is_half_day, exclude=None):
+	"""Casual Leave is limited to CASUAL_LEAVE_MONTHLY_CAP days per calendar month
+	(of from_dt). Counts existing non-rejected/cancelled CL in that month. Returns a
+	_fail(...) dict if the cap would be exceeded, else None."""
+	if str(leave_type) not in CASUAL_LEAVE_TYPES:
+		return None
+	this_days = 0.5 if is_half_day else (date_diff(to_dt, from_dt) + 1)
+	mstart = frappe.utils.get_first_day(from_dt)
+	mend = frappe.utils.get_last_day(from_dt)
+	filters = {
+		"employee": employee,
+		"leave_type": ["in", list(CASUAL_LEAVE_TYPES)],
+		"from_date": ["between", [mstart, mend]],
+		"status": ["not in", ["Rejected", "Cancelled"]],
+		"docstatus": ["<", 2],
+	}
+	if exclude:
+		filters["name"] = ["!=", exclude]
+	used = 0.0
+	for r in frappe.get_all("Leave Application", filters=filters, fields=["total_leave_days", "half_day", "from_date", "to_date"], ignore_permissions=True):
+		if r.get("total_leave_days"):
+			used += flt(r.total_leave_days)
+		elif r.get("half_day"):
+			used += 0.5
+		else:
+			used += (date_diff(r.to_date, r.from_date) + 1)
+	if used + this_days > CASUAL_LEAVE_MONTHLY_CAP:
+		return _fail(
+			"Casual Leave is limited to {0} days per month. You already have {1} day(s) of Casual Leave this month; this {2}-day request would exceed that.".format(
+				CASUAL_LEAVE_MONTHLY_CAP, (int(used) if used == int(used) else used), (int(this_days) if this_days == int(this_days) else this_days)),
+			"casual_monthly_cap_exceeded")
+	return None
 
 
 def _leave_approver_emails():
@@ -1773,6 +1812,9 @@ def apply_leave(employee=None, leave_type=None, from_date=None, to_date=None, ha
 		return _fail("Leave dates overlap with an existing leave.", "leave_overlap")
 	if not _has_leave_allocation(employee_doc.name, leave_type, from_dt, to_dt):
 		return _fail("Leave allocation not found. Please contact HR.", "leave_allocation_not_found")
+	cl_cap_error = _check_casual_monthly_cap(employee_doc.name, leave_type, from_dt, to_dt, is_half_day)
+	if cl_cap_error:
+		return cl_cap_error
 	try:
 		doc = frappe.new_doc("Leave Application")
 		doc.employee = employee_doc.name

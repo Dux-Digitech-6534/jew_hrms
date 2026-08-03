@@ -146,12 +146,14 @@ function buildLeaveTypeOptions(selectable: any[], allTypes: any[]) {
         .map((t: any) => ({ leave_type: t.name, leave_type_name: t.leave_type_name || t.name, is_lwp: t.is_lwp, unlimited: !!t.is_lwp, balance: null, has_allocation: undefined }));
   return src.map((t: any) => {
     const n = Number(t.balance);
-    const desc = t.unlimited
+    const base = t.unlimited
       ? "No balance limit"
       : (t.balance != null && !Number.isNaN(n)
           ? `${n} day${n === 1 ? "" : "s"} left`
           : (t.has_allocation === false ? "No allocation — ask HR" : ""));
-    return { value: t.leave_type, label: t.leave_type_name || t.leave_type, description: desc };
+    const disabled = !!t.disabled;
+    const desc = disabled ? `${base || "0 days left"} · not available` : base;
+    return { value: t.leave_type, label: t.leave_type_name || t.leave_type, description: desc, disabled };
   });
 }
 
@@ -1462,7 +1464,7 @@ function Select({ label, value, onChange, options, icon }: any) {
     const baseText = typeof option === "string" ? option : option.label;
     const description = typeof option === "string" ? "" : option.description;
     const text = description && description !== optionValue ? `${baseText} (${description})` : baseText;
-    return { value: optionValue, label: baseText || optionValue, description, text };
+    return { value: optionValue, label: baseText || optionValue, description, text, disabled: typeof option === "string" ? false : !!option.disabled };
   }), [options]);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -1487,7 +1489,7 @@ function Select({ label, value, onChange, options, icon }: any) {
           <div className="inp"><Ic name="search" /><input ref={searchRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={`Search ${label.toLowerCase()}`} /></div>
           <div className="select-options">
             <button className={`select-option ${!value ? "active" : ""}`} type="button" onClick={() => choose("")}><span>Select</span></button>
-            {filtered.length ? filtered.map((o: any) => <button className={`select-option ${o.value === value ? "active" : ""}`} type="button" key={o.value} onClick={() => choose(o.value)}><span>{o.label}</span>{o.description && <small>{o.description}</small>}</button>) : <div className="select-empty">No results found.</div>}
+            {filtered.length ? filtered.map((o: any) => <button className={`select-option ${o.value === value ? "active" : ""}`} type="button" key={o.value} disabled={o.disabled} style={o.disabled ? { opacity: 0.45, cursor: "not-allowed" } : undefined} onClick={() => { if (!o.disabled) choose(o.value); }}><span>{o.label}</span>{o.description && <small>{o.description}</small>}</button>) : <div className="select-empty">No results found.</div>}
           </div>
         </div>
       </div>, document.body)}
