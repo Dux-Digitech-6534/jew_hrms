@@ -1591,8 +1591,35 @@ def _send_template_email(recipients, template_name, ctx, doc):
 		frappe.log_error(frappe.get_traceback(), "JEW HRMS template email failed ({0})".format(template_name))
 
 
+def _notify_approvers_inapp(recipients, doc, employee_doc, status):
+	"""In-app (bell) notification for each stage approver who is also an employee, so
+	approvers see pending approvals in the app — not only by email. Best-effort."""
+	stage_label = {
+		APPROVAL_STATUSES["pending_dept_head"]: "Department Head",
+		APPROVAL_STATUSES["pending_md"]: "MD",
+		APPROVAL_STATUSES["pending_hr"]: "HR",
+		APPROVAL_STATUSES["pending_admin"]: "HR",
+	}.get(status, "")
+	msg = "{0} applied for {1} ({2} to {3}) — pending your {4} approval.".format(
+		employee_doc.employee_name or employee_doc.name, doc.leave_type,
+		frappe.utils.formatdate(doc.from_date), frappe.utils.formatdate(doc.to_date), stage_label).replace("  ", " ").strip()
+	seen = set()
+	for r in (recipients or []):
+		if not r:
+			continue
+		emp = frappe.db.get_value("Employee", {"user_id": r}, "name")
+		if not emp:
+			u = frappe.db.get_value("User", {"email": r}, "name")
+			if u:
+				emp = frappe.db.get_value("Employee", {"user_id": u}, "name")
+		if emp and emp not in seen:
+			seen.add(emp)
+			_safe_insert_notification(emp, "Leave approval needed", msg, "Info", "Leave Application", doc.name)
+
+
 def _send_stage_request_email(doc, employee_doc, status, ctx):
-	"""Email the approver for `status` with one-click Approve/Reject/View token links."""
+	"""Email the approver for `status` with one-click Approve/Reject/View token links,
+	and drop an in-app (bell) notification for approvers who are employees."""
 	recipients = _stage_approver_emails(status, employee_doc)
 	if not recipients:
 		return
@@ -1610,6 +1637,7 @@ def _send_stage_request_email(doc, employee_doc, status, ctx):
 	}.get(status)
 	if tmpl:
 		_send_template_email(recipients, tmpl, c, doc)
+	_notify_approvers_inapp(recipients, doc, employee_doc, status)
 
 
 def _notify_stage_advance(doc, employee_doc, level_label, approver_name, next_status):
