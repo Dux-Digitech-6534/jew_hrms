@@ -3,10 +3,38 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
     <title>JEW HRMS</title>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      // A home-screen shortcut / installed PWA can resume a suspended WebView from
+      // memory on reopen instead of doing a fresh network load, so a new deploy
+      // never gets picked up until the OS evicts it. Whenever the page becomes
+      // visible again, fetch the server's CURRENT html (bypassing cache) and force
+      // a reload if it now points at a different built bundle than what's running.
+      (function () {
+        function checkForUpdate() {
+          fetch(location.pathname, { cache: "no-store" })
+            .then(function (res) { return res.text(); })
+            .then(function (html) {
+              var match = html.match(/<script[^>]*type="module"[^>]*src="([^"]+)"/);
+              var newSrc = match && match[1];
+              var current = document.querySelector('script[type="module"][src*="/assets/"]');
+              if (newSrc && current && current.getAttribute("src") !== newSrc) {
+                location.reload();
+              }
+            })
+            .catch(function () {});
+        }
+        document.addEventListener("visibilitychange", function () {
+          if (document.visibilityState === "visible") checkForUpdate();
+        });
+      })();
+    </script>
   </body>
 </html>

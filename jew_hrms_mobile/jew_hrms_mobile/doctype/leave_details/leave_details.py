@@ -3,11 +3,17 @@ import calendar
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import add_days, cint, flt, getdate
+from frappe.utils import add_days, cint, flt, get_link_to_form, getdate
 
 # Canonical leave types on this bench (full names; short codes CL/PL/SL are stale duplicates).
 CL_TYPE = "Casual Leave"
 PL_TYPE = "Privilege Leave"
+LWP_TYPE = "Leave Without Pay"
+
+# Marker stored in the auto-created Leave Application's `description` field so on_cancel
+# can find and reverse exactly the ones this doc created (Leave Application has no free
+# transaction_name-style link field the way Leave Ledger Entry does).
+LWP_MARKER = "AUTO:LeaveDetails:{0}"
 
 # Ledger transaction_type used for the deduction rows.
 # HRMS `get_leaves_for_period` only counts consumption from three transaction types;
@@ -69,6 +75,119 @@ def _make_lle(doc, on_date, leave_type, leaves, is_lwp=0):
 	return lle.name
 
 
+def _create_lwp_leave_applications(doc):
+	"""One Approved, submitted Leave Application per LWP-flagged day, tagged with a
+	marker so on_cancel can find and cancel exactly these (and only these)."""
+	created = []
+	for r in doc.leaves:
+		if not cint(r.lwp):
+			continue
+		la = frappe.new_doc("Leave Application")
+		la.employee = doc.employee
+		la.company = doc.company
+		la.leave_type = LWP_TYPE
+		la.from_date = r.date
+		la.to_date = r.date
+		la.half_day = cint(r.half_day)
+		if cint(r.half_day):
+			la.half_day_date = r.date
+		la.posting_date = r.date
+		la.status = "Approved"
+		la.description = LWP_MARKER.format(doc.name)
+		la.flags.ignore_permissions = True
+		la.insert(ignore_permissions=True)
+		la.submit()
+		created.append(la.name)
+	return created
+
+
+def _cancel_lwp_leave_applications(doc):
+	names = frappe.get_all(
+		"Leave Application",
+		filters={"employee": doc.employee, "description": LWP_MARKER.format(doc.name), "docstatus": 1},
+		pluck="name",
+	)
+	for name in names:
+		la = frappe.get_doc("Leave Application", name)
+		la.cancel()
+	return names
+
+
+def _sync_salary_slip(doc, start, end):
+	"""Create (or recompute, if still Draft) the employee's Salary Slip for this month so
+	the LWP days just recorded actually reduce pay. A Submitted slip is left untouched —
+	that's a financial document; HR must deliberately cancel & amend it."""
+	existing = frappe.get_all(
+		"Salary Slip",
+		filters={"employee": doc.employee, "start_date": start, "end_date": end, "docstatus": ["!=", 2]},
+		fields=["name", "docstatus"],
+		limit=1,
+	)
+	if existing and existing[0].docstatus == 1:
+		frappe.msgprint(
+			_("Salary Slip {0} for this period is already Submitted. Leave was recorded, "
+			  "but the slip was NOT changed — cancel and amend it if this month's pay needs correcting.")
+			.format(get_link_to_form("Salary Slip", existing[0].name)),
+			indicator="orange", alert=True,
+		)
+		return None
+
+	try:
+		currency = frappe.get_cached_value("Company", doc.company, "default_currency") or "INR"
+		if existing:
+			slip = frappe.get_doc("Salary Slip", existing[0].name)
+			slip.get_emp_and_working_day_details()
+			slip.save()
+		else:
+			slip = frappe.new_doc("Salary Slip")
+			slip.employee = doc.employee
+			slip.company = doc.company
+			slip.currency = currency
+			slip.posting_date = end
+			slip.start_date = start
+			slip.end_date = end
+			slip.insert()
+
+		# Informational only (Payment Days/pay are unaffected): CL/PL stay fully paid,
+		# matching how this company's salary sheets already treat them.
+		cl_pl = flt(doc.cl_days) + flt(doc.pl_days)
+		present = flt(slip.total_working_days) - cl_pl - flt(doc.lwp_days)
+		frappe.db.set_value("Salary Slip", slip.name, {
+			"cl_pl_days": cl_pl,
+			"present_days": present,
+			"absent_days": flt(slip.total_working_days) - present,
+		})
+		return slip.name
+	except Exception:
+		frappe.log_error(title="Leave Details: Salary Slip sync failed", message=frappe.get_traceback())
+		frappe.msgprint(
+			_("Leave was recorded, but the Salary Slip for this period could not be created/updated "
+			  "automatically ({0}). Check the Error Log and prepare it manually.").format(doc.employee),
+			indicator="orange", alert=True,
+		)
+		return None
+
+
+def _sync_leave_display_fields(doc, start, end):
+	"""No LWP this month, so pay is unaffected - but if a Draft Salary Slip already
+	exists for this period, refresh its Present/CL+PL Days (display only)."""
+	slip = frappe.get_all(
+		"Salary Slip",
+		filters={"employee": doc.employee, "start_date": start, "end_date": end, "docstatus": 0},
+		fields=["name", "total_working_days"],
+		limit=1,
+	)
+	if not slip:
+		return
+	cl_pl = flt(doc.cl_days) + flt(doc.pl_days)
+	present = flt(slip[0].total_working_days) - cl_pl
+	frappe.db.set_value("Salary Slip", slip[0].name, {
+		"cl_pl_days": cl_pl,
+		"present_days": present,
+		"absent_days": flt(slip[0].total_working_days) - present,
+	})
+
+
 class LeaveDetails(Document):
 	def validate(self):
 		_require_roles()
@@ -86,7 +205,7 @@ class LeaveDetails(Document):
 		                  filters={"transaction_type": TXN_TYPE, "transaction_name": self.name, "docstatus": 1},
 		                  limit=1):
 			return
-		_, end = _month_bounds(self.month, self.year)
+		start, end = _month_bounds(self.month, self.year)
 		need_cl = sum((0.5 if cint(r.half_day) else 1) for r in self.leaves if cint(r.cl))
 		need_pl = sum((0.5 if cint(r.half_day) else 1) for r in self.leaves if cint(r.pl))
 		need_lwp = sum((0.5 if cint(r.half_day) else 1) for r in self.leaves if cint(r.lwp))
@@ -95,8 +214,6 @@ class LeaveDetails(Document):
 		if need_pl and _balance(self.employee, PL_TYPE, end) < need_pl:
 			frappe.throw(_("Not enough Privilege Leave balance: {0} day(s) needed, {1} available.").format(need_pl, _balance(self.employee, PL_TYPE, end)))
 		# Consume CL / PL from the balance (delta = one negative ledger entry per day).
-		# LWP days are NOT ledgered here — they stay unpaid via the original Leave Request
-		# and are surfaced as `lwp_days` below for the manual salary deduction.
 		for r in self.leaves:
 			qty = 0.5 if cint(r.half_day) else 1
 			if cint(r.cl):
@@ -107,15 +224,38 @@ class LeaveDetails(Document):
 		self.db_set("pl_days", need_pl, update_modified=False)
 		self.db_set("lwp_days", need_lwp, update_modified=False)
 
+		# LWP days: booked as real (Approved, submitted) Leave Applications so Frappe's
+		# own payroll engine (Payroll based on = Leave) picks them up automatically when
+		# the Salary Slip is built/rebuilt - no manual salary editing needed afterward.
+		if need_lwp:
+			_create_lwp_leave_applications(self)
+			_sync_salary_slip(self, start, end)
+		else:
+			# No LWP this month, so pay itself doesn't change - but if a Salary Slip already
+			# exists (still Draft) for this period, keep its Present/CL+PL display in sync.
+			_sync_leave_display_fields(self, start, end)
+
 	def on_cancel(self):
 		_require_roles()
 		# Reverse the deduction: drop every ledger entry this doc created so the
 		# CL/PL balance recomputes to its pre-submit value.
 		frappe.db.delete("Leave Ledger Entry",
 		                 {"transaction_type": TXN_TYPE, "transaction_name": self.name})
+		_cancel_lwp_leave_applications(self)
 		self.db_set("cl_days", 0, update_modified=False)
 		self.db_set("pl_days", 0, update_modified=False)
 		self.db_set("lwp_days", 0, update_modified=False)
+		start, end = _month_bounds(self.month, self.year)
+		slip = frappe.get_all("Salary Slip",
+		                      filters={"employee": self.employee, "start_date": start, "end_date": end, "docstatus": 0},
+		                      limit=1)
+		if slip:
+			frappe.msgprint(
+				_("Leave Details cancelled. Salary Slip {0} (still Draft) was NOT recalculated automatically - "
+				  "reopen it and click 'Get Emp & Working Days Details' if this month's pay needs to reflect the reversal.")
+				.format(get_link_to_form("Salary Slip", slip[0].name)),
+				indicator="orange", alert=True,
+			)
 
 
 @frappe.whitelist()

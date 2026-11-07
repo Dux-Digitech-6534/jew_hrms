@@ -1,6 +1,10 @@
-{% extends "templates/web.html" %}
-{% block title %}Leave Application{% endblock %}
-{% block page_content %}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<title>Leave Application</title>
 <style>
   :root {
     --paper: #f4f6f8; --ink: #1a2733; --muted: #64707a; --line: #d7dee3; --card: #ffffff;
@@ -11,10 +15,11 @@
       --approve: #3fbf74; --reject: #e06a54; --approve-bg: #123321; --reject-bg: #391f19; }
   }
   * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
   body { background: var(--paper); color: var(--ink); font-family: "Segoe UI", ui-sans-serif, system-ui, sans-serif; }
   .wrap { max-width: 480px; margin: 0 auto; padding: 40px 20px 60px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 24px; }
-  h1 { font-size: 20px; margin: 0 0 4px; }
+  h1 { font-size: 20px; margin: 0 0 4px; color: var(--ink); }
   .sub { color: var(--muted); font-size: 14px; margin: 0 0 20px; }
   .rows { border-top: 1px solid var(--line); margin-top: 16px; }
   .row { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 14.5px; }
@@ -33,7 +38,8 @@
   .warn { background: var(--reject-bg); color: var(--reject); border-radius: 6px; padding: 8px 12px; font-size: 13px; margin-top: 10px; }
   .footnote { color: var(--muted); font-size: 12.5px; margin-top: 18px; text-align: center; }
 </style>
-
+</head>
+<body>
 <div class="wrap">
   <div class="card">
     {% if done %}
@@ -86,4 +92,5 @@
     {% endif %}
   </div>
 </div>
-{% endblock %}
+</body>
+</html>

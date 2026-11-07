@@ -4,15 +4,41 @@
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 	<title>JEW HRMS</title>
+	<style>
+		html,body,#root{min-height:100%;margin:0}
+		body{background:#F3F4F7;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+		.static-preloader{min-height:100dvh;display:grid;place-items:center;background:linear-gradient(180deg,#F8F9FD,#EEF1F6);color:#1A2030}
+		.static-preloader-card{width:min(320px,calc(100vw - 44px));min-height:260px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:24px;border:1px solid #E7E9EE;border-radius:18px;background:rgba(255,255,255,.92);box-shadow:0 14px 40px rgba(22,28,46,.16);text-align:center}
+		.static-preloader-card img{height:44px;max-width:190px;object-fit:contain}
+		.static-preloader-card h1{margin:8px 0 0;font-size:28px;line-height:1;font-weight:780;background:linear-gradient(90deg,#5C4DE6,#4F9FD8 55%,#0E9C8B);-webkit-background-clip:text;background-clip:text;color:transparent}
+		.static-preloader-card p{margin:0;color:#586273;font-size:13.5px}
+		.static-spinner{width:28px;height:28px;border-radius:50%;border:3px solid #DCDFE6;border-top-color:#5C4DE6;animation:static-spin .8s linear infinite}
+		@keyframes static-spin{to{transform:rotate(360deg)}}
+		@media (prefers-color-scheme: dark){body{background:#0A0D13}.static-preloader{background:linear-gradient(180deg,#151A24,#0A0D13);color:#E8EAF1}.static-preloader-card{background:rgba(17,21,30,.92);border-color:#232938;box-shadow:0 18px 48px rgba(0,0,0,.46)}.static-preloader-card p{color:#9AA3B7}.static-spinner{border-color:#2C3344;border-top-color:#6D5EF6}}
+	</style>
 	<script>
 		window.frappe = window.frappe || {};
 		window.frappe.csrf_token = "{{ csrf_token }}";
+		{% if live_scan %}window.JEW_LIVENESS_ACTIVE = true;{% endif %}
 	</script>
 	{% for css in css_files or [] %}<link rel="stylesheet" href="{{ css }}">{% endfor %}
-	<style>.login-logo,.login-logo img,.login-mascot,.mascot-small,.login-options a,.login-options button,.footer img{display:none!important}</style>
 </head>
 <body>
-	<div id="root"></div>
+	<div id="root">
+		<div class="static-preloader" data-static-preloader>
+			<div class="static-preloader-card">
+				{% if logo_url %}
+				<picture>
+					{% if logo_white_url %}<source srcset="{{ logo_white_url }}" media="(prefers-color-scheme: dark)" />{% endif %}
+					<img src="{{ logo_url }}" alt="DUX Digitech" />
+				</picture>
+				{% endif %}
+				<h1>JEW HRMS</h1>
+				<p>Loading secure HRMS...</p>
+				<span class="static-spinner" aria-hidden="true"></span>
+			</div>
+		</div>
+	</div>
 	{% for js in js_files or [] %}<script type="module" src="{{ js }}"></script>{% endfor %}
 </body>
 </html>

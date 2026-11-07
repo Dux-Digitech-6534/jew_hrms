@@ -7,12 +7,12 @@
  "fields": [
   {"fieldname": "employee", "label": "Employee", "fieldtype": "Link", "options": "Employee", "reqd": 1},
   {"fieldname": "attendance_date", "label": "Attendance Date", "fieldtype": "Date", "reqd": 1},
-  {"fieldname": "issue_type", "label": "Issue Type", "fieldtype": "Select", "options": "Missing Mark Out\nLate Coming\nEarly Going\nShort Hours\nFace Mismatch\nOutside Location", "reqd": 1},
+  {"fieldname": "issue_type", "label": "Issue Type", "fieldtype": "Select", "options": "Missing Mark In\nMissing Mark Out\nMissing Mark In & Out\nLate Coming\nEarly Going\nShort Hours\nFace Mismatch\nOutside Location", "reqd": 1},
   {"fieldname": "in_time", "label": "In Time", "fieldtype": "Datetime"},
   {"fieldname": "out_time", "label": "Out Time", "fieldtype": "Datetime"},
   {"fieldname": "working_hours", "label": "Working Hours", "fieldtype": "Float"},
   {"fieldname": "policy_action", "label": "Policy Action", "fieldtype": "Select", "options": "Warn Only\nRegularization Required\nMark Half Day\nMark LWP\nBlock Attendance"},
-  {"fieldname": "status", "label": "Status", "fieldtype": "Select", "options": "Pending\nApproved as Present\nMarked Half Day\nMarked LWP\nRejected", "default": "Pending"},
+  {"fieldname": "status", "label": "Status", "fieldtype": "Select", "options": "Pending\nApproved as Present\nMarked Half Day\nMarked LWP\nMarked Late Coming\nMarked Early Going\nRejected", "default": "Pending"},
   {"fieldname": "requested_by", "label": "Requested By", "fieldtype": "Link", "options": "User"},
   {"fieldname": "created_by", "label": "Created By", "fieldtype": "Link", "options": "User"},
   {"fieldname": "approved_by", "label": "Approved By", "fieldtype": "Link", "options": "User"},
@@ -25,7 +25,7 @@
  "module": "JEW HRMS Mobile",
  "name": "JEW Attendance Regularization",
  "permissions": [
-  {"role": "Employee", "read": 1, "write": 0, "create": 0, "delete": 0, "report": 0, "print": 1},
+  {"role": "Employee", "read": 1, "write": 0, "create": 1, "delete": 0, "report": 0, "print": 1},
   {"role": "HR User", "read": 1, "write": 1, "create": 1, "delete": 0, "report": 1, "print": 1},
   {"role": "HR Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "print": 1},
   {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "print": 1},

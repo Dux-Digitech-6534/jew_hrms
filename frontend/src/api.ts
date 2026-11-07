@@ -6,9 +6,13 @@ export const API = {
   getDashboard: "jew_hrms_mobile.api.get_dashboard",
   getTodayAttendanceStatus: "jew_hrms_mobile.api.get_today_attendance_status",
   markAttendance: "jew_hrms_mobile.api.mark_attendance",
+  livenessStart: "jew_hrms_mobile.api.liveness_start",
   getAttendanceHistory: "jew_hrms_mobile.api.get_attendance_history",
   getFaceStatus: "jew_hrms_mobile.api.get_face_status",
   registerEmployeeFace: "jew_hrms_mobile.api.register_employee_face",
+  registerMyFace: "jew_hrms_mobile.face_approval.register_my_face",
+  getPendingFaceApprovals: "jew_hrms_mobile.face_approval.get_pending_face_approvals",
+  decideFaceApproval: "jew_hrms_mobile.face_approval.decide_face_approval",
   updateEmployeeFace: "jew_hrms_mobile.api.update_employee_face",
   getLocations: "jew_hrms_mobile.api.get_locations",
   saveLocation: "jew_hrms_mobile.api.save_location",
@@ -19,20 +23,42 @@ export const API = {
   getLeaveDashboard: "jew_hrms_mobile.api.get_leave_dashboard",
   getLeaveTypes: "jew_hrms_mobile.api.get_leave_types",
   applyLeave: "jew_hrms_mobile.api.apply_leave",
+  getLeaveWhatsapp: "jew_hrms_mobile.api.get_leave_whatsapp",
+  getRequestWhatsapp: "jew_hrms_mobile.api.get_request_whatsapp",
   getMyLeaves: "jew_hrms_mobile.api.get_my_leaves",
   cancelLeave: "jew_hrms_mobile.api.cancel_leave",
+  updateLeave: "jew_hrms_mobile.api.update_leave",
   getPendingLeaves: "jew_hrms_mobile.api.get_pending_leaves",
   getOnLeaveToday: "jew_hrms_mobile.api.get_on_leave_today",
   approveLeave: "jew_hrms_mobile.api.approve_leave",
   rejectLeave: "jew_hrms_mobile.api.reject_leave",
   getNotifications: "jew_hrms_mobile.api.get_notifications",
   getEmployeeList: "jew_hrms_mobile.api.get_employee_list",
+  getApproversOverview: "jew_hrms_mobile.api.get_approvers_overview",
   getLeavePolicy: "jew_hrms_mobile.api.get_leave_policy",
   saveLeaveType: "jew_hrms_mobile.api.save_leave_type",
   getShiftPolicies: "jew_hrms_mobile.api.get_shift_policies",
   saveShiftPolicy: "jew_hrms_mobile.api.save_shift_policy",
   getRegularizations: "jew_hrms_mobile.api.get_regularizations",
-  decideRegularization: "jew_hrms_mobile.api.decide_regularization"
+  getRegularizationDetail: "jew_hrms_mobile.api.get_regularization_detail",
+  decideRegularization: "jew_hrms_mobile.api.decide_regularization",
+  applyLateEarly: "jew_hrms_mobile.api.apply_late_early",
+  getMyLateEarly: "jew_hrms_mobile.api.get_my_late_early",
+  cancelLateEarly: "jew_hrms_mobile.api.cancel_late_early",
+  getPendingLateEarly: "jew_hrms_mobile.api.get_pending_late_early",
+  getPendingLateEarlyHr: "jew_hrms_mobile.api.get_pending_late_early_hr",
+  decideLateEarly: "jew_hrms_mobile.api.decide_late_early",
+  requestAttendanceRegularization: "jew_hrms_mobile.api.request_attendance_regularization",
+  getMyRegularizations: "jew_hrms_mobile.api.get_my_regularizations",
+  requestLeaveCancellation: "jew_hrms_mobile.api.request_leave_cancellation",
+  requestLateEarlyCancellation: "jew_hrms_mobile.api.request_late_early_cancellation",
+  getPendingCancellations: "jew_hrms_mobile.api.get_pending_cancellations",
+  decideLeaveCancellation: "jew_hrms_mobile.api.decide_leave_cancellation",
+  decideLateEarlyCancellation: "jew_hrms_mobile.api.decide_late_early_cancellation",
+  requestOnDuty: "jew_hrms_mobile.api.request_on_duty",
+  getMyOnDuty: "jew_hrms_mobile.api.get_my_on_duty",
+  getPendingOnDuty: "jew_hrms_mobile.api.get_pending_on_duty",
+  decideOnDuty: "jew_hrms_mobile.api.decide_on_duty"
 } as const;
 
 type Params = Record<string, unknown>;
@@ -66,6 +92,25 @@ export async function call<T = any>(method: string, params: Params = {}): Promis
     throw new Error(cleanErrorMessage(payload));
   }
   return payload;
+}
+
+export async function uploadFile(file: File): Promise<string> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("is_private", "1");
+  const response = await fetch("/api/method/upload_file", {
+    method: "POST",
+    credentials: "include",
+    headers: window.frappe?.csrf_token ? { "X-Frappe-CSRF-Token": window.frappe.csrf_token } : {},
+    body: form
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(cleanErrorMessage(data) || response.statusText || FALLBACK_ERROR);
+  }
+  const fileUrl = data.message?.file_url;
+  if (!fileUrl) throw new Error("Upload failed. Please try again.");
+  return fileUrl;
 }
 
 export async function logout() {

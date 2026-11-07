@@ -236,6 +236,16 @@ button,input,select,textarea{font:inherit}button{border:0;background:none;cursor
 .select-sheet-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .select-sheet-head strong{font-size:14px}
 .select-options{display:grid;gap:8px;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-right:2px}
+.sheet-layer{position:fixed;inset:0;z-index:3000;background:rgba(10,13,19,.4);display:flex;align-items:flex-end;justify-content:center;padding:12px 12px calc(20px + var(--safe-bottom))}
+.sheet{width:min(440px,100%);max-height:88dvh;border:1px solid var(--hair);border-radius:18px;background:var(--surface);box-shadow:var(--shadow-pop),var(--inset-hi);padding:16px;display:grid;grid-template-rows:auto minmax(0,1fr);gap:12px}
+.sheet-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.sheet-head strong{font-size:15px}
+.sheet-body{overflow-y:auto;-webkit-overflow-scrolling:touch;padding-right:2px}
+.sheet-row{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--hair);font-size:12.5px}
+.sheet-row:last-child{border-bottom:none}
+.sheet-row span:first-child{color:var(--faint)}
+.sheet-row span:last-child{text-align:right;font-weight:600}
+
 .select-option{min-height:44px;border:1px solid var(--hair);border-radius:12px;background:var(--surface);color:var(--text);display:grid;gap:1px;text-align:left;padding:9px 12px;cursor:pointer}
 .select-option span{font-weight:600;font-size:13px}
 .select-option small{font-size:11.5px;color:var(--faint);overflow-wrap:anywhere}
@@ -261,3 +271,17 @@ button,input,select,textarea{font:inherit}button{border:0;background:none;cursor
 .app-error{display:grid;justify-items:center;text-align:center;gap:6px;color:var(--muted);padding:24px}
 .app-error h2{margin:6px 0 0;font-size:17px;color:var(--text)}
 @media(max-width:380px){.grid2,.grid3{grid-template-columns:1fr}.h1{font-size:24px}}
+
+/* In-app calendar (DateField) - bottom sheet, mirrors .select-sheet */
+.date-sheet{width:min(416px,100%);max-height:88dvh;overflow-y:auto;border:1px solid var(--hair);border-radius:18px;background:var(--surface);box-shadow:var(--shadow-pop),var(--inset-hi);padding:12px;display:grid;gap:10px}
+.cal-nav{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.cal-nav strong{flex:1;text-align:center;font-size:14px}
+.cal-nav button{width:38px;height:38px;border:1px solid var(--hair);border-radius:10px;background:var(--surface);color:var(--text);font-size:17px;line-height:1;cursor:pointer}
+.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.cal-dow{font-size:11px;color:var(--faint);text-align:center;padding:4px 0;font-weight:600}
+.cal-day{height:40px;border:0;border-radius:10px;background:none;color:var(--text);font-size:13px;font-family:var(--font-mono);cursor:pointer}
+.cal-day.today{box-shadow:inset 0 0 0 1px var(--iris)}
+.cal-day.sel{background:var(--iris);color:#fff;font-weight:700}
+.cal-day:disabled{opacity:.28;cursor:not-allowed}
+.cal-foot{display:flex;gap:8px}
+.cal-foot .btn{height:42px}

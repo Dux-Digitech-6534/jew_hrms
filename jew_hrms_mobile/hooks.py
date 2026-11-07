@@ -127,13 +127,15 @@ website_route_rules = [
 # -----------
 # Permissions evaluated in scripted ways
 
-# permission_query_conditions = {
-# 	"Event": "frappe.desk.doctype.event.event.get_permission_query_conditions",
-# }
-#
-# has_permission = {
-# 	"Event": "frappe.desk.doctype.event.event.has_permission",
-# }
+permission_query_conditions = {
+	"Leave Application": "jew_hrms_mobile.api.leave_application_permission_query",
+	"Leave Details": "jew_hrms_mobile.api.leave_details_permission_query",
+}
+
+has_permission = {
+	"Leave Application": "jew_hrms_mobile.api.leave_application_has_permission",
+	"Leave Details": "jew_hrms_mobile.api.leave_details_has_permission",
+}
 
 # Document Events
 # ---------------
@@ -143,8 +145,33 @@ doc_events = {
 	"Leave Application": {
 		"before_insert": "jew_hrms_mobile.api.set_initial_leave_approval_stage",
 		"after_insert": "jew_hrms_mobile.api.send_initial_leave_stage_email",
-		"on_submit": "jew_hrms_mobile.api.sync_approved_leave_to_salary_slip",
-	}
+		"validate": [
+			"jew_hrms_mobile.api.sync_leave_terminal_status",
+			"jew_hrms_mobile.api.validate_leave_application_cl_cap",
+		],
+		"on_submit": [
+			"jew_hrms_mobile.api.sync_approved_leave_to_salary_slip",
+			"jew_hrms_mobile.birthday_policy.on_leave_submit",
+		],
+	},
+	"Employee": {
+		"on_update": "jew_hrms_mobile.api.sync_employee_statutory_deductions",
+	},
+	"Salary Structure Assignment": {
+		"on_submit": "jew_hrms_mobile.api.sync_statutory_deductions_on_ssa_submit",
+	},
+	"Employee Checkin": {
+		"before_validate": "jew_hrms_mobile.attendance_fields.populate_employee_checkin_fields",
+	},
+	"Attendance": {
+		"before_validate": "jew_hrms_mobile.attendance_fields.populate_attendance_fields",
+	},
+	"Sales Invoice": {
+		"before_naming": "jew_hrms_mobile.sales_invoice_naming.set_credit_note_naming_series",
+	},
+	"Purchase Invoice": {
+		"before_naming": "jew_hrms_mobile.purchase_invoice_naming.set_debit_note_naming_series",
+	},
 }
 
 # Scheduled Tasks
@@ -158,7 +185,25 @@ scheduler_events = {
 		# Leave Applications stuck in the Owner-approval stage past OWNER_AUTO_APPROVE_DAYS
 		# advance automatically to HR, with an email noting Owner never acted.
 		"jew_hrms_mobile.api.auto_approve_stale_owner_leaves",
+		# Fires daily but only actually generates Salary Slips on the last day
+		# of the month (see run_month_end_salary_slip_generation's own check).
+		"jew_hrms_mobile.api.run_month_end_salary_slip_generation",
+		# Work-anniversary notice to HR only (HRMS's all-employee version is off).
+		"jew_hrms_mobile.api.send_work_anniversary_hr_notice",
+		# Birthday reminder to HR only (no other employee is notified).
+		"jew_hrms_mobile.api.send_birthday_hr_notice",
+		# Delete Punch audit photos older than the retention period (default 90 days, set on the Punch audit page).
+		# Its own job: it no longer depends on process_missing_attendance finishing.
+		"jew_hrms_mobile.punch_audit.daily_purge",
 	],
+	"cron": {
+		# Alert System Managers as soon as any outgoing email finally fails (e.g. an
+		# SMTP daily sending-limit error) instead of it silently sitting in Email
+		# Queue with status=Error until someone happens to check.
+		"*/15 * * * *": ["jew_hrms_mobile.api.notify_admins_of_failed_emails"],
+		# Daily STAFF attendance report emailed to HR at 10:00 (Asia/Kolkata) for the previous day.
+		"0 10 * * *": ["jew_hrms_mobile.api.send_daily_staff_attendance"],
+	},
 }
 
 # Testing

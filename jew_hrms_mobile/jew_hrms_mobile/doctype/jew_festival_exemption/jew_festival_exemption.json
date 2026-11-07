@@ -1,0 +1,106 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "field:festival_name",
+ "creation": "2026-09-17 11:20:05.034731",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "festival_name",
+  "exemption_date",
+  "default_allowed_time",
+  "it_department_allowed_time",
+  "is_active"
+ ],
+ "fields": [
+  {
+   "description": "e.g. Janmashtami, Ganesh Chaturthi, Ganesh Visarjan",
+   "fieldname": "festival_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Festival Name",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "description": "Leave blank if the date is not confirmed yet - fill it in once known.",
+   "fieldname": "exemption_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "Date"
+  },
+  {
+   "description": "Checking out at or after this time on this date is NOT counted as Early Going. Checking out earlier is marked Half Day.",
+   "fieldname": "default_allowed_time",
+   "fieldtype": "Time",
+   "in_list_view": 1,
+   "label": "Allowed Early-Going Time (Everyone)",
+   "reqd": 1
+  },
+  {
+   "description": "Optional override for the IT department only. Leave blank to use the time above for IT too.",
+   "fieldname": "it_department_allowed_time",
+   "fieldtype": "Time",
+   "label": "Allowed Early-Going Time (IT Department)"
+  },
+  {
+   "default": "1",
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Active"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-09-17 11:20:05.034731",
+ "modified_by": "Administrator",
+ "module": "JEW HRMS Mobile",
+ "name": "JEW Festival Exemption",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR User",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "exemption_date",
+ "sort_order": "DESC",
+ "states": []
+}

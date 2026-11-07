@@ -1,0 +1,353 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-10-27 12:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "employee",
+  "employee_name",
+  "checkin",
+  "log_type",
+  "punch_time",
+  "source",
+  "section_clock",
+  "server_time",
+  "client_time",
+  "clock_drift_seconds",
+  "section_place",
+  "location_name",
+  "distance_m",
+  "radius_m",
+  "gps_accuracy",
+  "section_face",
+  "face_distance",
+  "face_threshold",
+  "liveness_score",
+  "liveness_mode",
+  "section_device",
+  "device_id",
+  "device_model",
+  "os_version",
+  "browser",
+  "ip_address",
+  "user_agent",
+  "section_photo",
+  "punch_photo",
+  "section_review",
+  "reviewed",
+  "reviewed_by",
+  "reviewed_on",
+  "review_note",
+  "section_speed",
+  "cam_ms",
+  "cap_ms",
+  "gps_wait_ms",
+  "gps_prewarmed",
+  "column_speed",
+  "lead_ms",
+  "scan_try",
+  "server_ms",
+  "face_ms"
+ ],
+ "fields": [
+  {
+   "fieldname": "employee",
+   "label": "Employee",
+   "fieldtype": "Link",
+   "options": "Employee",
+   "reqd": 1,
+   "search_index": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "employee_name",
+   "label": "Employee Name",
+   "fieldtype": "Data",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "checkin",
+   "label": "Employee Checkin",
+   "fieldtype": "Link",
+   "options": "Employee Checkin",
+   "search_index": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "log_type",
+   "label": "Log Type",
+   "fieldtype": "Select",
+   "options": "\nIN\nOUT",
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "punch_time",
+   "label": "Punch Time",
+   "fieldtype": "Datetime",
+   "search_index": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "source",
+   "label": "Source",
+   "fieldtype": "Data",
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "section_clock",
+   "label": "Clock",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "server_time",
+   "label": "Server Time",
+   "fieldtype": "Datetime"
+  },
+  {
+   "fieldname": "client_time",
+   "label": "Phone Clock Time",
+   "fieldtype": "Datetime"
+  },
+  {
+   "fieldname": "clock_drift_seconds",
+   "label": "Clock Drift (seconds)",
+   "fieldtype": "Int",
+   "description": "Phone clock minus server clock when the punch was sent. Positive = phone ahead."
+  },
+  {
+   "fieldname": "section_place",
+   "label": "Place",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "location_name",
+   "label": "Matched Location",
+   "fieldtype": "Data"
+  },
+  {
+   "fieldname": "distance_m",
+   "label": "Distance From Centre (m)",
+   "fieldtype": "Float",
+   "precision": "2"
+  },
+  {
+   "fieldname": "radius_m",
+   "label": "Geofence Radius (m)",
+   "fieldtype": "Float",
+   "precision": "2"
+  },
+  {
+   "fieldname": "gps_accuracy",
+   "label": "GPS Accuracy (m)",
+   "fieldtype": "Float",
+   "precision": "2"
+  },
+  {
+   "fieldname": "section_face",
+   "label": "Face",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "face_distance",
+   "label": "Face Distance",
+   "fieldtype": "Float",
+   "precision": "4",
+   "description": "Lower is a closer match to the registered face."
+  },
+  {
+   "fieldname": "face_threshold",
+   "label": "Face Threshold",
+   "fieldtype": "Float",
+   "precision": "4"
+  },
+  {
+   "fieldname": "liveness_score",
+   "label": "Liveness Score",
+   "fieldtype": "Float",
+   "precision": "4"
+  },
+  {
+   "fieldname": "liveness_mode",
+   "label": "Liveness Mode",
+   "fieldtype": "Data"
+  },
+  {
+   "fieldname": "section_device",
+   "label": "Device",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "device_id",
+   "label": "Device ID",
+   "fieldtype": "Data",
+   "search_index": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "device_model",
+   "label": "Device Model",
+   "fieldtype": "Data"
+  },
+  {
+   "fieldname": "os_version",
+   "label": "OS",
+   "fieldtype": "Data"
+  },
+  {
+   "fieldname": "browser",
+   "label": "Browser / WebView",
+   "fieldtype": "Data"
+  },
+  {
+   "fieldname": "ip_address",
+   "label": "IP Address",
+   "fieldtype": "Data",
+   "search_index": 1
+  },
+  {
+   "fieldname": "user_agent",
+   "label": "User Agent",
+   "fieldtype": "Small Text"
+  },
+  {
+   "fieldname": "section_photo",
+   "label": "Photo",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "punch_photo",
+   "label": "Punch Photo",
+   "fieldtype": "Attach Image"
+  },
+  {
+   "fieldname": "section_review",
+   "label": "HR Review",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "reviewed",
+   "label": "Reviewed",
+   "fieldtype": "Check"
+  },
+  {
+   "fieldname": "reviewed_by",
+   "label": "Reviewed By",
+   "fieldtype": "Link",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "reviewed_on",
+   "label": "Reviewed On",
+   "fieldtype": "Datetime",
+   "read_only": 1
+  },
+  {
+   "fieldname": "review_note",
+   "label": "Review Note",
+   "fieldtype": "Small Text"
+  },
+  {
+   "fieldname": "section_speed",
+   "fieldtype": "Section Break",
+   "label": "Scan speed"
+  },
+  {
+   "fieldname": "cam_ms",
+   "fieldtype": "Int",
+   "label": "Camera start (ms)",
+   "description": "Tap on Mark In/Out until the camera was ready (first try only)."
+  },
+  {
+   "fieldname": "cap_ms",
+   "fieldtype": "Int",
+   "label": "Photo capture (ms)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "gps_wait_ms",
+   "fieldtype": "Int",
+   "label": "GPS wait after photo (ms)",
+   "description": "How long the punch waited for GPS after the photo was taken. 0 = GPS was already ready."
+  },
+  {
+   "fieldname": "gps_prewarmed",
+   "fieldtype": "Check",
+   "label": "GPS pre-warmed",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_speed",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "lead_ms",
+   "fieldtype": "Int",
+   "label": "Tap to upload start (ms)",
+   "description": "From tapping Mark In/Out (or Retry) until the photo + GPS were ready and the request was sent."
+  },
+  {
+   "fieldname": "scan_try",
+   "fieldtype": "Int",
+   "label": "Scan attempt no.",
+   "description": "1 = first scan of this tap; higher = retries before this punch."
+  },
+  {
+   "fieldname": "server_ms",
+   "fieldtype": "Int",
+   "label": "Server time (ms)",
+   "description": "Server work for this punch up to saving the check-in (face match included)."
+  },
+  {
+   "fieldname": "face_ms",
+   "fieldtype": "Int",
+   "label": "Face match on server (ms)"
+  }
+ ],
+ "in_create": 1,
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-11-07 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "JEW HRMS Mobile",
+ "name": "JEW Punch Audit",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "JEW HRMS Admin",
+   "read": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "JEW HRMS HR",
+   "read": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "JEW HRMS Owner",
+   "read": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "punch_time",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "employee_name",
+ "track_changes": 0
+}

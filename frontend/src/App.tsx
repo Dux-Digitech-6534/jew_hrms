@@ -2,65 +2,101 @@ import { Component, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, us
 import { createPortal } from "react-dom";
 import { MapContainer, Marker, TileLayer, Circle, useMap, useMapEvents } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
-import { API, call, cleanErrorMessage, logout } from "./api";
+import { API, call, cleanErrorMessage, logout, uploadFile } from "./api";
 import { IconSprite, Ic, BrandMark } from "./icons";
 
 type Caps = {
   can_mark_attendance: boolean;
   can_apply_leave: boolean;
+  can_apply_late_early?: boolean;
+  can_request_regularization?: boolean;
+  can_apply_on_duty?: boolean;
+  can_approve_on_duty?: boolean;
   can_register_face: boolean;
+  can_self_register_face?: boolean;
+  can_approve_face?: boolean;
   can_manage_locations: boolean;
   can_approve_leave: boolean;
+  can_approve_late_early?: boolean;
+  can_approve_late_early_hr?: boolean;
+  can_decide_cancellations?: boolean;
   can_view_admin: boolean;
   can_manage_leave_policy?: boolean;
   can_manage_shift_policy?: boolean;
   can_manage_regularization?: boolean;
+  can_view_approvers?: boolean;
+  can_manage_masters?: boolean;
+  can_apply_leave_for_others?: boolean;
   is_admin: boolean;
   is_hr?: boolean;
   is_owner?: boolean;
+  is_dept_head?: boolean;
   approval_level?: string;
 };
 
 type View =
-  | "dashboard" | "attendance" | "history" | "leave" | "admin" | "face" | "location"
-  | "leaveApproval" | "leavePolicy" | "shiftPolicy" | "regularization" | "employees"
+  | "dashboard" | "attendance" | "history" | "leave" | "lateEarly" | "regularizationRequest" | "admin" | "face" | "selfFace" | "faceApproval" | "location"
+  | "leaveApproval" | "lateEarlyApproval" | "lateEarlyApprovalHr" | "cancellationApproval" | "leavePolicy" | "shiftPolicy" | "regularization" | "employees" | "approvers" | "onDuty" | "onDutyApproval"
   | "notifications" | "profile" | "settings";
 
 const DENY: Caps = {
-  can_mark_attendance: false, can_apply_leave: false, can_register_face: false,
-  can_manage_locations: false, can_approve_leave: false, can_view_admin: false,
+  can_mark_attendance: false, can_apply_leave: false, can_apply_late_early: false, can_request_regularization: false, can_register_face: false,
+  can_manage_locations: false, can_approve_leave: false, can_approve_late_early: false, can_view_admin: false,
   can_manage_leave_policy: false, can_manage_shift_policy: false, can_manage_regularization: false,
   is_admin: false
 };
 
 const REMEMBER_LOGIN_KEY = "jew_hrms_remember_login";
 const ADMIN_ACCESS_ROLES = ["JEW HRMS Admin", "JEW HRMS HR", "JEW HRMS Owner"];
-const ADMIN_VIEWS: ReadonlySet<View> = new Set<View>(["admin", "face", "location", "leaveApproval", "leavePolicy", "shiftPolicy", "regularization", "employees"]);
+const ADMIN_VIEWS: ReadonlySet<View> = new Set<View>(["admin", "face", "location", "leaveApproval", "lateEarlyApproval", "lateEarlyApprovalHr", "cancellationApproval", "leavePolicy", "shiftPolicy", "regularization", "employees", "approvers", "onDutyApproval"]);
 
 function canAccessAdmin(userRoles: unknown) {
   return Array.isArray(userRoles) && userRoles.some((role) => ADMIN_ACCESS_ROLES.includes(String(role).trim()));
 }
 
 function applyAdminRoleVisibility(userCaps: Partial<Caps>, userRoles: unknown): Caps {
-  const adminAllowed = canAccessAdmin(userRoles);
+  const isDeptHead = Boolean(userCaps.is_dept_head);
+  // A department head holds no admin ROLE but the backend flags them; grant them the
+  // (backend-scoped) admin panel too. Full admins still come through the role check.
+  const adminAllowed = canAccessAdmin(userRoles) || isDeptHead;
   return {
     ...DENY,
     ...userCaps,
     can_view_admin: adminAllowed,
     can_register_face: adminAllowed && Boolean(userCaps.can_register_face),
     can_manage_locations: adminAllowed && Boolean(userCaps.can_manage_locations),
+    can_manage_masters: adminAllowed && Boolean(userCaps.can_manage_masters),
+    can_apply_leave_for_others: adminAllowed && Boolean(userCaps.can_apply_leave_for_others),
     can_approve_leave: adminAllowed && Boolean(userCaps.can_approve_leave),
+    can_approve_late_early: adminAllowed && Boolean(userCaps.can_approve_late_early),
     can_manage_leave_policy: adminAllowed && Boolean(userCaps.can_manage_leave_policy),
     can_manage_shift_policy: adminAllowed && Boolean(userCaps.can_manage_shift_policy),
     can_manage_regularization: adminAllowed && Boolean(userCaps.can_manage_regularization),
     is_admin: adminAllowed && Boolean(userCaps.is_admin),
     is_hr: adminAllowed && Boolean(userCaps.is_hr),
-    is_owner: adminAllowed && Boolean(userCaps.is_owner)
+    is_owner: adminAllowed && Boolean(userCaps.is_owner),
+    is_dept_head: isDeptHead
   };
 }
 
 function capacitorPlugin(name: string) {
   return (window as any).Capacitor?.Plugins?.[name];
+}
+
+// Install ID of this app / browser (kept in localStorage). It is sent with every punch so HR can see which
+// phone a punch came from (Punch audit page). It identifies the install, nothing about the person.
+function getDeviceId(): string {
+  try {
+    let id = localStorage.getItem("jew_hrms_device_id") || "";
+    if (!/^D-[0-9A-F]{8}$/.test(id)) {
+      const bytes = new Uint8Array(4);
+      if (window.crypto?.getRandomValues) window.crypto.getRandomValues(bytes);
+      else for (let i = 0; i < 4; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+      id = "D-" + Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+      localStorage.setItem("jew_hrms_device_id", id);
+    }
+    return id;
+  } catch { return ""; }
 }
 
 function formatTime(value?: string) {
@@ -100,6 +136,70 @@ function greeting() {
   if (h < 21) return "Good evening";
   return "Good night";
 }
+// Open a link outside the app: in the Capacitor APK a navigation to another host is handed to Android
+// (ACTION_VIEW - WhatsApp's own app links take over); in a normal browser it opens a new tab.
+function openExternal(url: string) {
+  const native = !!(window as any).Capacitor?.isNativePlatform?.();
+  if (native) { window.location.href = url; return; }
+  const w = window.open(url, "_blank", "noopener");
+  if (!w) window.location.href = url;
+}
+// Copy to the clipboard: the synchronous way first (stays inside the tap gesture), then the async API.
+async function copyText(text: string): Promise<boolean> {
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.setAttribute("readonly", ""); ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;pointer-events:none";
+    document.body.appendChild(ta); ta.focus(); ta.select(); ta.setSelectionRange(0, text.length);
+    const ok = document.execCommand("copy"); document.body.removeChild(ta);
+    if (ok) return true;
+  } catch { /* fall through */ }
+  try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
+}
+function WhatsAppSheet({ wa, flash, onClose, heading }: { wa: { text: string; group_url: string }; flash: (title: string, msg: string) => void; onClose: () => void; heading?: string }) {
+  const shareUrl = "https://wa.me/?text=" + encodeURIComponent(wa.text);
+  const toGroup = async () => {
+    const copied = await copyText(wa.text);
+    if (copied) { flash("Message copied", "Paste it in the group and tap Send."); openExternal(wa.group_url); return; }
+    // Could not reach the clipboard: open WhatsApp's share screen instead, where the text is already filled in.
+    flash("Opening WhatsApp", "Choose the leave group and tap Send.");
+    openExternal(shareUrl);
+  };
+  const share = () => openExternal(shareUrl);
+  return createPortal(
+    <div className="sheet-layer" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="sheet" role="dialog" aria-modal="true" aria-label="Send to WhatsApp group">
+        <div className="sheet-head"><strong>{heading || "Send to WhatsApp group"}</strong><button className="ibtn" type="button" aria-label="Close" onClick={onClose}><Ic name="close" /></button></div>
+        <div className="sheet-body">
+          <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 8 }}>Post this in the leave group so everyone knows.</div>
+          <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 13, lineHeight: 1.55, padding: "11px 13px", borderRadius: 12, border: "1px solid var(--hair)", background: "var(--bg2, rgba(0,0,0,.03))", userSelect: "text" }}>{wa.text}</div>
+          <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
+            <button className="btn ok" type="button" onClick={toGroup}><Ic name="copy" /> Copy message &amp; open group</button>
+            <button className="btn ghost" type="button" onClick={share}><Ic name="send" /> Share on WhatsApp instead</button>
+            <button className="btn ghost" type="button" onClick={onClose}>Skip</button>
+          </div>
+          <div style={{ fontSize: 11.5, color: "var(--faint)", marginTop: 10 }}>The message is copied and the group opens - paste it there and tap Send.</div>
+        </div>
+      </div>
+    </div>, document.body);
+}
+// "Send to WhatsApp group" for On Duty / Late-Early / Regularization: same sheet as leave requests.
+function useRequestWhatsApp(kind: string, flash: (title: string, msg: string) => void) {
+  const [waShare, setWaShare] = useState<any>(null);
+  const [waBusy, setWaBusy] = useState<string | null>(null);
+  const openWa = async (name: string, kindOverride?: string) => {
+    if (waBusy) return;
+    setWaBusy(name);
+    try {
+      const r: any = await call(API.getRequestWhatsapp, { kind: kindOverride || kind, name });
+      if (r?.whatsapp?.text) setWaShare(r.whatsapp);
+    } catch (error) { flash("WhatsApp", cleanErrorMessage(error)); } finally { setWaBusy(null); }
+  };
+  return { waShare, setWaShare, openWa, waBusy };
+}
+function WaButton({ onClick, busy, label }: { onClick: () => void; busy?: boolean; label?: string }) {
+  return <button className="ibtn" type="button" aria-label={label || "Send to WhatsApp group"} title={label || "Send to WhatsApp group"} disabled={busy}
+    style={{ flex: "none", color: "#15916A" }} onClick={(e) => { e.stopPropagation(); onClick(); }}><Ic name="send" /></button>;
+}
 // Display dates as dd/mm/yyyy across the app.
 function fmtDMY(value?: string) {
   if (!value) return "";
@@ -109,6 +209,20 @@ function fmtDMY(value?: string) {
   const d = new Date(str);
   if (Number.isNaN(d.getTime())) return str;
   return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+}
+
+// Convert a native <input type="time"> value ("HH:MM", 24-hour) into a
+// friendly 12-hour label for display in explanations/emails.
+function fmtTime12(value?: string) {
+  if (!value) return "";
+  const m = String(value).match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return value;
+  let h = parseInt(m[1], 10);
+  const min = m[2];
+  const suffix = h >= 12 ? "PM" : "AM";
+  h = h % 12;
+  if (h === 0) h = 12;
+  return `${h}:${min} ${suffix}`;
 }
 
 // Collapse options that share a display label (the site has duplicate leave
@@ -130,6 +244,12 @@ function dedupeByLabel(options: any[]) {
 // shows once. Consolidating these in Frappe is the proper long-term fix.
 const HIDDEN_LEAVE_TYPES = new Set(["CL", "SL", "PL", "LWP"]);
 
+// Casual Leave is capped at CASUAL_LEAVE_MONTHLY_CAP days per calendar month
+// (enforced server-side too — see api.py _check_casual_monthly_cap). A single
+// request longer than the cap can never succeed, so it's disabled client-side
+// rather than letting the employee hit a submit-time error.
+const CASUAL_LEAVE_MONTHLY_CAP = 2;
+
 // Build the leave-type picker options, mirroring the Desk Leave Application's
 // leave_type link field (ALL leave types are selectable). The backend
 // (get_leave_dashboard) returns `selectable_types` already ordered
@@ -137,8 +257,9 @@ const HIDDEN_LEAVE_TYPES = new Set(["CL", "SL", "PL", "LWP"]);
 // `unlimited` (is_lwp) flag, or `has_allocation:false` for types the employee
 // isn't allocated. That annotation becomes the option sub-label. If the list is
 // unavailable (older backend), fall back to the full Leave Type list minus the
-// duplicate short-code records.
-function buildLeaveTypeOptions(selectable: any[], allTypes: any[]) {
+// duplicate short-code records. `requestedDays` (from the From/To picked so
+// far) disables Casual Leave once the request would exceed the monthly cap.
+function buildLeaveTypeOptions(selectable: any[], allTypes: any[], requestedDays?: number) {
   const src = (selectable && selectable.length)
     ? selectable
     : (allTypes || [])
@@ -146,74 +267,16 @@ function buildLeaveTypeOptions(selectable: any[], allTypes: any[]) {
         .map((t: any) => ({ leave_type: t.name, leave_type_name: t.leave_type_name || t.name, is_lwp: t.is_lwp, unlimited: !!t.is_lwp, balance: null, has_allocation: undefined }));
   return src.map((t: any) => {
     const n = Number(t.balance);
+    const isCasual = String(t.leave_type_name || t.leave_type || "").toLowerCase() === "casual leave";
+    const overCasualCap = isCasual && Number(requestedDays || 0) > CASUAL_LEAVE_MONTHLY_CAP;
     const base = t.unlimited
       ? "No balance limit"
       : (t.balance != null && !Number.isNaN(n)
           ? `${n} day${n === 1 ? "" : "s"} left`
           : (t.has_allocation === false ? "No allocation — ask HR" : ""));
-    const disabled = !!t.disabled;
-    const desc = disabled ? `${base || "0 days left"} · not available` : base;
+    const disabled = !!t.disabled || overCasualCap;
+    const desc = overCasualCap ? `Max ${CASUAL_LEAVE_MONTHLY_CAP} days at a time` : (disabled ? `${base || "0 days left"} · not available` : base);
     return { value: t.leave_type, label: t.leave_type_name || t.leave_type, description: desc, disabled };
-  });
-}
-
-// --- Robust camera + location acquisition (old Android / Chrome / WebView friendly) ---
-// Old cameras throw NotReadableError ("Could not start video source") on strict
-// constraints; try progressively simpler ones, with a short retry for transient
-// hardware locks.
-async function openCamera(): Promise<MediaStream> {
-  if (!navigator.mediaDevices?.getUserMedia) throw new Error("Camera is not available on this device.");
-  const tries: MediaStreamConstraints[] = [
-    { video: { facingMode: "user", width: { ideal: 720 }, height: { ideal: 720 } }, audio: false },
-    { video: { facingMode: "user" }, audio: false },
-    { video: true, audio: false },
-  ];
-  let lastErr: any;
-  for (const constraints of tries) {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try { return await navigator.mediaDevices.getUserMedia(constraints); }
-      catch (err: any) {
-        lastErr = err;
-        const name = err?.name || "";
-        if (name === "NotReadableError" || name === "TrackStartError" || name === "AbortError") {
-          await new Promise((r) => window.setTimeout(r, 500)); // transient — wait & retry same constraints
-          continue;
-        }
-        break; // OverconstrainedError / NotFoundError etc. — fall to simpler constraints
-      }
-    }
-  }
-  throw lastErr || new Error("Could not start the camera.");
-}
-
-// Old Chrome's first geolocation fix is a coarse NETWORK location (can be hundreds of
-// metres off) → false "outside geofence" even when on-site. Watch briefly and return
-// the most accurate fix. This only improves the position sent — it does NOT change the
-// server-side geofence rule.
-function getBestPosition(timeout = 15000, goodAccuracyM = 60): Promise<GeolocationCoordinates> {
-  return new Promise((resolve, reject) => {
-    if (!navigator.geolocation) return reject(new Error("Location is not available on this device."));
-    let best: GeolocationCoordinates | null = null;
-    let settled = false;
-    let watchId = -1;
-    const finish = (err?: any) => {
-      if (settled) return; settled = true;
-      try { if (watchId >= 0) navigator.geolocation.clearWatch(watchId); } catch { /* ignore */ }
-      window.clearTimeout(timer);
-      if (best) resolve(best); else reject(err || new Error("no_fix"));
-    };
-    const timer = window.setTimeout(() => finish(), timeout);
-    try {
-      watchId = navigator.geolocation.watchPosition(
-        (pos) => {
-          const c = pos.coords;
-          if (!best || (c.accuracy ?? 1e9) < (best.accuracy ?? 1e9)) best = c;
-          if ((c.accuracy ?? 1e9) <= goodAccuracyM) finish(); // good lock — stop early
-        },
-        (err) => { if (!best) finish(err); },
-        { enableHighAccuracy: true, timeout, maximumAge: 0 },
-      );
-    } catch (e) { finish(e); }
   });
 }
 
@@ -226,14 +289,24 @@ const navMeta: Record<View, { title: string; sub: string; nav?: string; back?: b
   attendance: { title: "Attendance", sub: "Mark in / out", nav: "attendance" },
   history: { title: "History", sub: "My records", nav: "attendance", back: true },
   leave: { title: "Leave", sub: "Apply & track", nav: "leave" },
+  lateEarly: { title: "Late / Early", sub: "Apply & track", nav: "attendance", back: true },
+  onDuty: { title: "On Duty", sub: "Apply & track", nav: "attendance", back: true },
+  onDutyApproval: { title: "On Duty approval", sub: "Approve/reject requests", nav: "admin", back: true },
+  regularizationRequest: { title: "Regularization", sub: "Request & track", nav: "attendance", back: true },
   admin: { title: "Admin", sub: "Manager access", nav: "admin" },
   face: { title: "Face register", sub: "Enroll template", nav: "admin", back: true },
+  selfFace: { title: "My face", sub: "Register for approval", nav: "profile", back: true },
+  faceApproval: { title: "Face approvals", sub: "Approve employee photos", nav: "admin", back: true },
   location: { title: "Geofence", sub: "Work sites", nav: "admin", back: true },
   leaveApproval: { title: "Leave approval", sub: "Pending requests", nav: "admin", back: true },
+  lateEarlyApproval: { title: "Late/Early approval", sub: "Pending requests", nav: "admin", back: true },
+  lateEarlyApprovalHr: { title: "Late/Early — HR approval", sub: "Final sign-off", nav: "admin", back: true },
+  cancellationApproval: { title: "Cancellations", sub: "Approve/reject requests", nav: "admin", back: true },
   leavePolicy: { title: "Leave policy", sub: "Leave types", nav: "admin", back: true },
   shiftPolicy: { title: "Shift policy", sub: "Attendance rules", nav: "admin", back: true },
   regularization: { title: "Regularization", sub: "Pending review", nav: "admin", back: true },
   employees: { title: "Employees", sub: "Directory", nav: "admin", back: true },
+  approvers: { title: "Approvers", sub: "Who approves what", nav: "admin", back: true },
   notifications: { title: "Notifications", sub: "Alerts & reminders", nav: "dashboard", back: true },
   profile: { title: "Profile", sub: "My details", nav: "profile" },
   settings: { title: "Settings", sub: "Preferences", nav: "profile", back: true }
@@ -313,13 +386,18 @@ export default function App() {
   const [session, setSession] = useState<any>(null);
   const [dashboard, setDashboard] = useState<any>(null);
   const [profile, setProfile] = useState<any>(null);
+  const [history, setHistory] = useState<any>(null);
   const [leaveData, setLeaveData] = useState<any>({});
+  const [lateEarlyData, setLateEarlyData] = useState<any>({});
+  const [onDutyData, setOnDutyData] = useState<any>({});
+  const [myRegularizations, setMyRegularizations] = useState<any>({});
   const [adminData, setAdminData] = useState<any>({});
   const [selectedEmployee, setSelectedEmployee] = useState("");
   const [notifications, setNotifications] = useState<any[]>([]);
   const [toast, setToast] = useState<{ title: string; msg: string } | null>(null);
   const [cameraActive, setCameraActive] = useState(false);
   const lastBackRef = useRef(0);
+  const deepLinkHandledRef = useRef(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -340,8 +418,8 @@ export default function App() {
   const resetSessionState = () => {
     window.dispatchEvent(new Event("jew-hrms-stop-camera"));
     window.dispatchEvent(new Event("jew-hrms-close-attendance-verify"));
-    setSession(null); setDashboard(null); setProfile(null);
-    setLeaveData({}); setAdminData({}); setSelectedEmployee(""); setNotifications([]);
+    setSession(null); setDashboard(null); setProfile(null); setHistory(null);
+    setLeaveData({}); setLateEarlyData({}); setOnDutyData({}); setMyRegularizations({}); setAdminData({}); setSelectedEmployee(""); setNotifications([]);
     setCaps(DENY); setView("dashboard"); setViewStack([]); setMenuOpen(false);
     setRefreshing(false); setCameraActive(false);
   };
@@ -380,25 +458,33 @@ export default function App() {
       const status = await call(API.getTodayAttendanceStatus);
       setAdminData((prev: any) => ({ ...prev, attendanceStatus: status }));
     }
-    // History loads its own data (self-contained date-range filter) — no fetch here.
+    if (next === "history") setHistory(await call(API.getAttendanceHistory));
     if (next === "leave") {
-      // Load each part independently — a failure in one call (e.g. an employee
-      // with no allocations) must not blank out the whole leave form.
-      const [typesR, dashR, mineR, empR] = await Promise.allSettled([
-        call(API.getLeaveTypes),
-        call(API.getLeaveDashboard),
-        call(API.getMyLeaves),
-        caps.can_view_admin ? call(API.getEmployeeList) : Promise.resolve({ employees: [] }),
-      ]);
+      const calls: Promise<any>[] = [call(API.getLeaveTypes), call(API.getLeaveDashboard), call(API.getMyLeaves)];
+      if (caps.can_view_admin) calls.push(call(API.getEmployeeList));
+      // Load each part independently - one failing call must not blank out the whole leave
+      // form (it used to: a single rejected request left the Leave type picker empty).
+      const settled = await Promise.allSettled(calls);
+      if (settled.every((r) => r.status === "rejected")) throw (settled[0] as PromiseRejectedResult).reason;
       const val = (r: any) => (r && r.status === "fulfilled" ? r.value : {});
-      const types = val(typesR), dash = val(dashR), mine = val(mineR), employees = val(empR);
-      setLeaveData({
-        types: types.leave_types || [],
-        selectable: dash.selectable_types || [],
-        balances: dash.balances || [],
-        leaves: mine.leaves || [],
-        employees: employees?.employees || [],
-      });
+      const [types, dash, mine, employees] = settled.map(val);
+      setLeaveData({ types: types.leave_types || [], selectable: dash.selectable_types || [], balances: dash.balances || [], leaves: mine.leaves || [], employees: employees?.employees || [] });
+    }
+    if (next === "lateEarly") {
+      const mine = await call(API.getMyLateEarly);
+      setLateEarlyData({ applications: mine.applications || [] });
+    }
+    if (next === "onDuty") {
+      const mine = await call(API.getMyOnDuty);
+      setOnDutyData({ requests: mine.requests || [] });
+    }
+    if (next === "onDutyApproval" && caps.can_approve_on_duty) {
+      const pending = await call(API.getPendingOnDuty);
+      setAdminData((prev: any) => ({ ...prev, pendingOnDuty: pending.requests || [] }));
+    }
+    if (next === "regularizationRequest") {
+      const mine = await call(API.getMyRegularizations);
+      setMyRegularizations({ regularizations: mine.regularizations || [] });
     }
     if (next === "profile") setProfile((await call(API.getEmployeeProfile)).employee_profile);
     if (next === "notifications") setNotifications((await call(API.getNotifications)).notifications || []);
@@ -416,6 +502,10 @@ export default function App() {
       const employees = await call(API.getEmployeeList);
       setAdminData((prev: any) => ({ ...prev, employees: employees.employees }));
     }
+    if (next === "faceApproval" && caps.can_approve_face) {
+      const fa = await call(API.getPendingFaceApprovals);
+      setAdminData((prev: any) => ({ ...prev, faceApprovals: fa.requests || [] }));
+    }
     if (next === "location" && caps.can_manage_locations) {
       const locations = await call(API.getLocations);
       const employees = await call(API.getEmployeeList);
@@ -425,9 +515,25 @@ export default function App() {
       const employees = await call(API.getEmployeeList);
       setAdminData((prev: any) => ({ ...prev, employees: employees.employees }));
     }
+    if (next === "approvers" && caps.can_view_approvers) {
+      const overview = await call(API.getApproversOverview);
+      setAdminData((prev: any) => ({ ...prev, approvers: overview }));
+    }
     if (next === "leaveApproval" && caps.can_approve_leave) {
       const pending = await call(API.getPendingLeaves);
       setAdminData((prev: any) => ({ ...prev, pendingLeaves: pending.leaves }));
+    }
+    if (next === "lateEarlyApproval" && caps.can_approve_late_early) {
+      const pending = await call(API.getPendingLateEarly);
+      setAdminData((prev: any) => ({ ...prev, pendingLateEarly: pending.applications }));
+    }
+    if (next === "lateEarlyApprovalHr" && caps.can_approve_late_early_hr) {
+      const pending = await call(API.getPendingLateEarlyHr);
+      setAdminData((prev: any) => ({ ...prev, pendingLateEarlyHr: pending.applications }));
+    }
+    if (next === "cancellationApproval" && caps.can_decide_cancellations) {
+      const pending = await call(API.getPendingCancellations);
+      setAdminData((prev: any) => ({ ...prev, pendingCancelLeaves: pending.leaves, pendingCancelLateEarly: pending.late_early }));
     }
     if (next === "leavePolicy" && caps.can_manage_leave_policy) {
       const policy = await call(API.getLeavePolicy);
@@ -450,9 +556,15 @@ export default function App() {
       return;
     }
     if (next === "face" && !caps.can_register_face) { flash("Not permitted", "You do not have access to face registration."); return; }
+    if (next === "selfFace" && !caps.can_self_register_face) { flash("Not permitted", "Face self-registration is not enabled for you."); return; }
+    if (next === "faceApproval" && !caps.can_approve_face) { flash("Not permitted", "You do not have access to face approvals."); return; }
     if (next === "location" && !caps.can_manage_locations) { flash("Not permitted", "You do not have access to location setup."); return; }
     if (next === "employees" && !caps.can_view_admin) { flash("Not permitted", "You do not have access to employee list."); return; }
+    if (next === "approvers" && !caps.can_view_approvers) { flash("Not permitted", "You do not have access to this admin screen."); return; }
     if (next === "leaveApproval" && !caps.can_approve_leave) { flash("Not permitted", "You do not have approval permission."); return; }
+    if (next === "lateEarlyApproval" && !caps.can_approve_late_early) { flash("Not permitted", "You do not have approval permission."); return; }
+    if (next === "lateEarlyApprovalHr" && !caps.can_approve_late_early_hr) { flash("Not permitted", "You do not have approval permission."); return; }
+    if (next === "cancellationApproval" && !caps.can_decide_cancellations) { flash("Not permitted", "You do not have approval permission."); return; }
     if (next === "leavePolicy" && !caps.can_manage_leave_policy) { flash("Not permitted", "You do not have access to leave policy."); return; }
     if (next === "shiftPolicy" && !caps.can_manage_shift_policy) { flash("Not permitted", "You do not have access to shift policy."); return; }
     if (next === "regularization" && !caps.can_manage_regularization) { flash("Not permitted", "You do not have access to regularization."); return; }
@@ -503,6 +615,34 @@ export default function App() {
     }
   }, [caps.can_view_admin, loggedIn, view]);
 
+  // Deep link from a notification email (e.g. "?view=regularization&name=abc123") -
+  // land straight on that ONE request, not the dashboard and not the whole pending
+  // queue. Runs once, after caps are actually loaded (a stale `caps` read right after
+  // login would wrongly look like "not permitted").
+  useEffect(() => {
+    if (!loggedIn || deepLinkHandledRef.current) return;
+    deepLinkHandledRef.current = true;
+    const params = new URLSearchParams(window.location.search);
+    const target = params.get("view") as View | null;
+    const targetName = params.get("name");
+    if (!target || target === "dashboard") return;
+    window.history.replaceState(null, "", window.location.pathname);
+    if (target === "regularization" && targetName) {
+      if (!caps.can_manage_regularization) { flash("Not permitted", "You do not have access to this admin screen."); return; }
+      (async () => {
+        try {
+          const detail = await call(API.getRegularizationDetail, { name: targetName });
+          setAdminData((prev: any) => ({ ...prev, regularizations: [detail.regularization] }));
+          setMenuOpen(false);
+          setViewStack((stack) => [...stack, view].slice(-12));
+          setView(target);
+        } catch (error: any) { flash("Unable to load", cleanErrorMessage(error)); }
+      })();
+      return;
+    }
+    open(target, { replace: true });
+  }, [loggedIn, caps]);
+
   const navItems = useMemo(() => {
     return [
       { id: "dashboard", label: "Home", icon: "home", view: "dashboard" as View, show: true },
@@ -545,19 +685,29 @@ export default function App() {
         <PullToRefresh onRefresh={refreshCurrent} refreshing={refreshing}>
           <main className={`page ${showTabs ? "" : "noTab"}`}>
             {view === "dashboard" && <Dashboard data={dashboard} open={open} caps={caps} flash={flash} session={session} />}
-            {view === "attendance" && <Attendance flash={flash} open={open} initialStatus={adminData.attendanceStatus} onCameraActiveChange={setCameraActive} onMarked={async () => { setDashboard(await call(API.getDashboard)); const status = await call(API.getTodayAttendanceStatus); setAdminData((prev: any) => ({ ...prev, attendanceStatus: status })); }} />}
-            {view === "history" && <History />}
+            {view === "attendance" && <Attendance flash={flash} open={open} caps={caps} initialStatus={adminData.attendanceStatus} onCameraActiveChange={setCameraActive} onMarked={async () => { const [dash, status] = await Promise.all([call(API.getDashboard), call(API.getTodayAttendanceStatus)]); setDashboard(dash); setAdminData((prev: any) => ({ ...prev, attendanceStatus: status })); }} />}
+            {view === "history" && <History data={history} />}
             {view === "leave" && <Leave data={leaveData} caps={caps} flash={flash} me={session?.employee} reload={() => open("leave")} />}
+            {view === "lateEarly" && <LateEarly data={lateEarlyData} flash={flash} reload={() => open("lateEarly")} />}
+            {view === "onDuty" && <OnDuty data={onDutyData} flash={flash} reload={() => open("onDuty")} />}
+            {view === "onDutyApproval" && (caps.can_view_admin && caps.can_approve_on_duty ? <OnDutyApproval requests={adminData.pendingOnDuty || []} flash={flash} reload={() => open("onDutyApproval")} /> : <NotPermitted />)}
+            {view === "regularizationRequest" && <RegularizationRequest data={myRegularizations} flash={flash} reload={() => open("regularizationRequest")} />}
             {view === "admin" && (caps.can_view_admin ? <Admin open={open} caps={caps} data={adminData} /> : <NotPermitted />)}
             {view === "face" && (caps.can_view_admin && caps.can_register_face ? <FaceAdmin employees={adminData.employees || []} flash={flash} selectedEmployee={selectedEmployee} onCameraActiveChange={setCameraActive} /> : <NotPermitted />)}
-            {view === "location" && (caps.can_view_admin && caps.can_manage_locations ? <LocationAdmin data={adminData} setData={setAdminData} flash={flash} reload={() => open("location")} /> : <NotPermitted />)}
+            {view === "selfFace" && (caps.can_self_register_face ? <SelfFace flash={flash} me={session?.employee} onCameraActiveChange={setCameraActive} /> : <NotPermitted />)}
+            {view === "faceApproval" && (caps.can_approve_face ? <FaceApproval requests={adminData.faceApprovals || []} flash={flash} reload={() => open("faceApproval")} /> : <NotPermitted />)}
+            {view === "location" && (caps.can_view_admin && caps.can_manage_locations ? <LocationAdmin data={adminData} setData={setAdminData} flash={flash} reload={() => open("location")} caps={caps} /> : <NotPermitted />)}
             {view === "leaveApproval" && (caps.can_view_admin && caps.can_approve_leave ? <LeaveApproval leaves={adminData.pendingLeaves || []} flash={flash} reload={() => open("leaveApproval")} /> : <NotPermitted />)}
+            {view === "lateEarlyApproval" && (caps.can_view_admin && caps.can_approve_late_early ? <LateEarlyApproval items={adminData.pendingLateEarly || []} flash={flash} reload={() => open("lateEarlyApproval")} /> : <NotPermitted />)}
+            {view === "lateEarlyApprovalHr" && (caps.can_view_admin && caps.can_approve_late_early_hr ? <LateEarlyApproval items={adminData.pendingLateEarlyHr || []} flash={flash} reload={() => open("lateEarlyApprovalHr")} /> : <NotPermitted />)}
+            {view === "cancellationApproval" && (caps.can_view_admin && caps.can_decide_cancellations ? <CancellationApproval leaves={adminData.pendingCancelLeaves || []} lateEarly={adminData.pendingCancelLateEarly || []} flash={flash} reload={() => open("cancellationApproval")} /> : <NotPermitted />)}
             {view === "leavePolicy" && (caps.can_view_admin && caps.can_manage_leave_policy ? <LeavePolicy types={adminData.leaveTypes || []} flash={flash} reload={() => open("leavePolicy")} /> : <NotPermitted />)}
             {view === "shiftPolicy" && (caps.can_view_admin && caps.can_manage_shift_policy ? <ShiftPolicy policies={adminData.shiftPolicies || []} flash={flash} reload={() => open("shiftPolicy")} /> : <NotPermitted />)}
             {view === "regularization" && (caps.can_view_admin && caps.can_manage_regularization ? <Regularization items={adminData.regularizations || []} flash={flash} reload={() => open("regularization")} /> : <NotPermitted />)}
             {view === "employees" && (caps.can_view_admin ? <Employees employees={adminData.employees || []} open={open} selectEmployee={setSelectedEmployee} /> : <NotPermitted />)}
+            {view === "approvers" && (caps.can_view_approvers ? <Approvers data={adminData.approvers || {}} /> : <NotPermitted />)}
             {view === "notifications" && <Notifications items={notifications} />}
-            {view === "profile" && <Profile profile={profile} open={open} onLogout={handleLogout} />}
+            {view === "profile" && <Profile profile={profile} open={open} caps={caps} onLogout={handleLogout} />}
             {view === "settings" && <Settings theme={theme} setTheme={setTheme} onLogout={handleLogout} />}
           </main>
         </PullToRefresh>
@@ -682,13 +832,23 @@ function MenuDrawer({ open, caps, active, session, openView, onClose, onLogout }
     caps.can_mark_attendance && { view: "attendance", label: "Mark attendance", icon: "fp" },
     caps.can_mark_attendance && { view: "history", label: "Attendance history", icon: "clock" },
     caps.can_apply_leave && { view: "leave", label: "Leave", icon: "leaf" },
+    caps.can_apply_late_early && { view: "lateEarly", label: "Late / Early", icon: "clock" },
+    caps.can_apply_on_duty && { view: "onDuty", label: "On Duty", icon: "briefcase" },
+    caps.can_request_regularization && { view: "regularizationRequest", label: "Regularization", icon: "refresh" },
+    caps.can_self_register_face && { view: "selfFace", label: "Register my face", icon: "camera" },
     { view: "notifications", label: "Notifications", icon: "bell" }
   ].filter(Boolean) as any[];
   const admin = [
     caps.can_view_admin && { view: "admin", label: "Admin panel", icon: "shield" },
     caps.can_approve_leave && { view: "leaveApproval", label: "Leave approval", icon: "check" },
+    caps.can_approve_late_early && { view: "lateEarlyApproval", label: "Late/Early approval", icon: "check" },
+    caps.can_approve_late_early_hr && { view: "lateEarlyApprovalHr", label: "Late/Early — HR approval", icon: "check" },
+    caps.can_approve_on_duty && { view: "onDutyApproval", label: "On Duty approval", icon: "check" },
+    caps.can_decide_cancellations && { view: "cancellationApproval", label: "Cancellations", icon: "close" },
     caps.can_view_admin && { view: "employees", label: "Employees", icon: "users" },
+    caps.can_view_approvers && { view: "approvers", label: "Approvers", icon: "check" },
     caps.can_register_face && { view: "face", label: "Face register", icon: "camera" },
+    caps.can_approve_face && { view: "faceApproval", label: "Face approvals", icon: "check" },
     caps.can_manage_locations && { view: "location", label: "Locations / geofence", icon: "pin" },
     caps.can_manage_leave_policy && { view: "leavePolicy", label: "Leave policy", icon: "leaf" },
     caps.can_manage_shift_policy && { view: "shiftPolicy", label: "Shift policy", icon: "clock" },
@@ -725,10 +885,8 @@ function Chip({ kind = "info", icon, children }: any) {
 }
 function statusChipKind(status?: string) {
   const s = String(status || "").toLowerCase();
-  // Order matters: "Pending … Approval" contains "approv" but is NOT approved.
-  if (s.includes("reject") || s.includes("cancel")) return "err";
-  if (s.includes("pending")) return "pend";
   if (s.includes("approv")) return "ok";
+  if (s.includes("reject") || s.includes("cancel")) return "err";
   return "pend";
 }
 
@@ -767,12 +925,15 @@ function Dashboard({ data, open, caps, flash, session }: any) {
       {caps.can_mark_attendance && <Mod icon="fp" title="Mark attendance" sub="Face + geofence verified" onClick={() => guarded(caps.can_mark_attendance, "attendance", "Employee mapping is not configured. Please contact HR.")} />}
       <Mod icon="clock" cyan title="Attendance history" sub="Timeline & monthly summary" onClick={() => open("history")} />
       {caps.can_apply_leave && <Mod icon="leaf" title="Apply for leave" sub="Submit & track requests" onClick={() => guarded(caps.can_apply_leave, "leave", "Leave access is not configured. Please contact HR.")} />}
+      {caps.can_apply_on_duty && <Mod icon="briefcase" title="On Duty" sub="Apply & track requests" onClick={() => guarded(caps.can_apply_on_duty, "onDuty", "On Duty access is not configured. Please contact HR.")} />}
+      {caps.can_apply_late_early && <Mod icon="clock" cyan title="Late / Early request" sub="Apply for late coming or early going" onClick={() => guarded(caps.can_apply_late_early, "lateEarly", "Employee mapping is not configured. Please contact HR.")} />}
+      {caps.can_request_regularization && <Mod icon="refresh" title="Regularization request" sub="Missed check-in/out? Request here" onClick={() => guarded(caps.can_request_regularization, "regularizationRequest", "Employee mapping is not configured. Please contact HR.")} />}
       <Mod icon="bell" cyan title="Notifications" sub="Alerts & reminders" onClick={() => open("notifications")} />
     </div>
   </>;
 }
 
-function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: any) {
+function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange, open, caps }: any) {
   const [status, setStatus] = useState<any>(initialStatus || null);
   const [verifyType, setVerifyType] = useState<"IN" | "OUT" | null>(null);
   const [coords, setCoords] = useState<GeolocationCoordinates | null>(null);
@@ -786,6 +947,9 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: an
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const autoSubmitRef = useRef(false);
+  // Speed: GPS fix started before the user taps Mark In/Out, and stage timings sent with the punch (stored in Punch audit).
+  const prewarmRef = useRef<{ p: Promise<GeolocationCoordinates>; at: number } | null>(null);
+  const tapRef = useRef(0); const camMsRef = useRef(0); const triesRef = useRef(0);
 
   useEffect(() => { setStatus(initialStatus || null); }, [initialStatus]);
   useEffect(() => {
@@ -798,19 +962,33 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: an
     return () => window.clearInterval(timer);
   }, []);
 
+  const requestPosition = (highAccuracy: boolean, timeout: number) => new Promise<GeolocationCoordinates>((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition((pos) => resolve(pos.coords), (err) => reject(err), { enableHighAccuracy: highAccuracy, timeout, maximumAge: 30000 });
+  });
   const getCurrentLocation = async (): Promise<GeolocationCoordinates> => {
     if (!navigator.geolocation) throw new Error("Location is not available on this device.");
-    try {
-      return await getBestPosition(15000, 60); // wait for a good GPS lock, take the most accurate fix
-    } catch (err: any) {
+    try { return await requestPosition(true, 15000); }
+    catch (err: any) {
       if (err && err.code === 1) throw new Error("Location is turned off for this app. Please enable location/GPS and allow access, then try again.");
-      // last resort: accept any single fix so a weak-GPS device can still submit
-      try {
-        return await new Promise<GeolocationCoordinates>((resolve, reject) =>
-          navigator.geolocation.getCurrentPosition((p) => resolve(p.coords), reject, { enableHighAccuracy: false, timeout: 20000, maximumAge: 60000 }));
-      } catch { throw new Error("Could not get your location. Please turn on GPS/location and try again in an open area."); }
+      try { return await requestPosition(false, 20000); }
+      catch { throw new Error("Could not get your location. Please turn on GPS/location and try again in an open area."); }
     }
   };
+  // The GPS fix is the slowest part on a cold phone, so it starts as soon as Mark In / Mark Out is possible (screen opened) and the
+  // punch re-uses it while it is fresh - the verify screen then never waits for GPS after the photo.
+  const prewarmFresh = () => { const pre = prewarmRef.current; return pre && Date.now() - pre.at < 45000 ? pre : null; };
+  const startLocation = (): Promise<GeolocationCoordinates> => {
+    const pre = prewarmFresh();
+    return pre ? pre.p.catch(() => getCurrentLocation()) : getCurrentLocation();
+  };
+  useEffect(() => {
+    if (verifyType || !navigator.geolocation) return;
+    if (!status?.can_mark_in && !status?.can_mark_out) return;
+    const pre = prewarmRef.current;
+    if (pre && Date.now() - pre.at < 20000) return;
+    const p = getCurrentLocation(); p.catch(() => { /* retried when the punch starts */ });
+    prewarmRef.current = { p, at: Date.now() };
+  }, [status?.can_mark_in, status?.can_mark_out, verifyType]);
 
   const stopVerifyCamera = () => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -820,7 +998,7 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: an
     onCameraActiveChange?.(false);
   };
   const closeVerify = () => {
-    stopVerifyCamera(); autoSubmitRef.current = false; setVerifyType(null); setSubmitting(false);
+    stopVerifyCamera(); autoSubmitRef.current = false; triesRef.current = 0; setVerifyType(null); setSubmitting(false);
     setCoords(null); setGpsStatus("Captured on submit"); setCameraStatus("Starting camera..."); setFaceStatus("Looking for face...");
   };
   useEffect(() => {
@@ -830,8 +1008,9 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: an
   }, []);
 
   const startVerifyCamera = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error("Camera is not available on this device.");
     setCameraStatus("Starting camera..."); setFaceStatus("Looking for face...");
-    const stream = await openCamera();
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 720 }, height: { ideal: 720 } }, audio: false });
     streamRef.current = stream; onCameraActiveChange?.(true);
     const video = videoRef.current; const canvas = canvasRef.current;
     if (!video || !canvas) throw new Error("Camera is not ready.");
@@ -841,6 +1020,7 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: an
     for (let i = 0; i < 20; i += 1) { if (video.videoWidth > 0 && video.videoHeight > 0) break; await new Promise((resolve) => window.setTimeout(resolve, 100)); }
     if (!video.videoWidth || !video.videoHeight) throw new Error("Camera is still starting. Please try again.");
     setCameraReady(true); setCameraStatus("Camera ready"); setFaceStatus("Ready to capture");
+    camMsRef.current = Math.round(performance.now() - tapRef.current);
   };
 
   useEffect(() => {
@@ -859,35 +1039,97 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: an
   }, [verifyType, cameraReady]);
 
   const captureCurrentFrame = () => {
-    const video = videoRef.current; const canvas = canvasRef.current;
-    if (!video || !canvas || !streamRef.current || !video.videoWidth || !video.videoHeight) throw new Error("Camera is still starting. Please try again.");
-    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-    canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL("image/jpeg", 0.9);
+    const video = videoRef.current;
+    if (!video || !streamRef.current || !video.videoWidth || !video.videoHeight) throw new Error("Camera is still starting. Please try again.");
+    const frame = regGrabFrame(video, 560, 0.85);
+    if (!frame) throw new Error("Camera is still starting. Please try again.");
+    return frame;
   };
   const openVerify = (type: "IN" | "OUT") => {
     if (type === "IN" && !status?.can_mark_in) { flash("Attendance", !faceReady ? "Face not registered. Please contact admin." : !locationReady ? "Location not assigned. Please contact admin." : "Mark In is not available now."); return; }
     if (type === "OUT" && !status?.can_mark_out) { flash("Attendance", !faceReady ? "Face not registered. Please contact admin." : !locationReady ? "Location not assigned. Please contact admin." : "Mark Out is not available now."); return; }
+    tapRef.current = performance.now(); camMsRef.current = 0; triesRef.current = 0;
     setVerifyType(type);
+  };
+  const runActiveLiveness = async (challenge: any): Promise<string[]> => {
+    const frames = await liveFilmScan(() => (streamRef.current ? videoRef.current : null), challenge.steps || [], setFaceStatus, 480);
+    setFaceStatus("Verifying live scan...");
+    return frames;
   };
   const confirmVerify = async () => {
     if (!verifyType || submitting) return;
     setSubmitting(true);
+    // GPS runs in parallel with the photo (or was already pre-warmed) on every site - the punch never waits for it afterwards.
+    const liveOn = isLiveScanSite();
+    triesRef.current += 1;
+    const tConfirm = performance.now();
+    const usedPre = Boolean(prewarmFresh());
+    const locPromise = startLocation();
+    locPromise.catch(() => { /* surfaced where it is awaited */ });
     try {
+      // Ask the server whether this site needs the active live scan. Any failure here (or "enabled: false")
+      // simply keeps the normal single-selfie flow below - the server still enforces its own rules.
+      let challenge: any = null;
+      if (liveOn) { try { challenge = await call(API.livenessStart, { type: verifyType }); } catch { challenge = null; } }
+      let liveFrames: string[] | null = null;
+      if (challenge?.enabled) {
+        if (challenge.locked) throw new Error(challenge.message || "Too many failed attempts. Please try again later.");
+        liveFrames = await runActiveLiveness(challenge);
+      }
       setFaceStatus("Face captured");
-      const capturedImage = captureCurrentFrame();
+      const tCap = performance.now();
+      const capturedImage = liveFrames ? liveFrames[0] : captureCurrentFrame();
+      const capMs = Math.round(performance.now() - tCap);
       if (!capturedImage) { flash("Face required", "Please keep your full face inside the frame."); return; }
       setGpsStatus("Capturing GPS...");
-      const currentCoords = await getCurrentLocation();
+      const tGps = performance.now();
+      const currentCoords = await locPromise;
+      const gpsMs = Math.round(performance.now() - tGps);
       setCoords(currentCoords); setGpsStatus("Captured"); setFaceStatus("Verifying face");
-      const result = await call(API.markAttendance, { type: verifyType, face_image: capturedImage, latitude: currentCoords.latitude, longitude: currentCoords.longitude, accuracy: currentCoords.accuracy, timestamp: new Date().toISOString() });
-      await onMarked?.();
+      const firstTry = triesRef.current === 1;
+      const clientTimings = JSON.stringify({ v: 1, try: triesRef.current, cam: firstTry ? camMsRef.current : 0, cap: capMs, gps: gpsMs, pw: usedPre ? 1 : 0, lead: Math.round(performance.now() - (firstTry ? tapRef.current : tConfirm)) });
+      const result = await call(API.markAttendance, { type: verifyType, face_image: capturedImage, latitude: currentCoords.latitude, longitude: currentCoords.longitude, accuracy: currentCoords.accuracy, timestamp: new Date().toISOString(), device_id: getDeviceId(), client_timings: clientTimings, ...(liveFrames ? { liveness_challenge: challenge.token, liveness_frames: liveFrames } : {}) });
+      // The punch is saved server-side at this point: a hiccup refreshing the dashboard
+      // must not leave the user stuck on the verify screen.
       if (result?.attendance_status) setStatus(result.attendance_status);
+      // The punch is saved - close at once and refresh the dashboard in the background (status is already set above).
       flash("Attendance", result.message || toastText(result.code));
       closeVerify();
+      void Promise.resolve(onMarked?.()).catch(() => { /* non-fatal - status refreshes when the tab reopens */ });
     } catch (error) {
       setFaceStatus(cleanErrorMessage(error));
-      flash("Attendance failed", cleanErrorMessage(error));
+      // The server may have recorded the punch before the error came back (e.g. a step
+      // after the check-in failed). Resync, so the screen reflects reality instead of
+      // offering the same Mark In / Mark Out again.
+      let done = false;
+      let doneMsg = verifyType === "OUT" ? "Mark Out recorded." : "Mark In recorded.";
+      try {
+        const fresh: any = await call(API.getTodayAttendanceStatus);
+        setStatus(fresh);
+        // Leave the verify screen (and never offer the same Mark In / Mark Out
+        // again) once today is settled - already punched, fully completed, or
+        // HR-resolved. Only a genuinely still-open action stays for a retry.
+        if (verifyType === "OUT") {
+          done = fresh?.status === "completed" || fresh?.status === "regularized";
+        } else {
+          done = fresh?.status === "in" || fresh?.status === "completed" || fresh?.status === "regularized";
+        }
+        if (fresh?.status === "completed") doneMsg = "Attendance already completed for today.";
+        else if (fresh?.status === "regularized") doneMsg = "Today’s attendance was already resolved by HR.";
+      } catch {
+        // Could not refresh (offline). Fall back to the error text: an "already
+        // marked / completed / resolved" error still means the day is settled.
+        const m = cleanErrorMessage(error).toLowerCase();
+        done = m.includes("already") && (m.includes("complet") || m.includes("marked") || m.includes("resolved"));
+        doneMsg = cleanErrorMessage(error);
+      }
+      if (done) {
+        try { await onMarked?.(); } catch { /* non-fatal */ }
+        flash("Attendance", doneMsg);
+        closeVerify();
+      } else {
+        flash("Attendance failed", cleanErrorMessage(error));
+      }
     } finally { setSubmitting(false); }
   };
 
@@ -911,6 +1153,7 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: an
           <div className="scan"><span className="chip ok"><Ic name="camera" /> {faceStatus}</span></div>
         </div>
         <p className="sub" style={{ marginTop: 12 }}>Center your face in the frame — verification &amp; submit are automatic.</p>
+        <p className="sub" style={{ marginTop: 6, fontSize: 11.5 }}>Your face photo, device and location are recorded to verify attendance.</p>
         <div style={{ marginTop: 12, display: "flex", gap: 9, justifyContent: "center", flexWrap: "wrap" }}>
           <Chip kind="info" icon="pin">{coords ? `${coords.latitude.toFixed(4)}, ${coords.longitude.toFixed(4)}` : gpsStatus}</Chip>
           <Chip kind="data" icon="clock">IST {nowText}</Chip>
@@ -937,7 +1180,9 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: an
         <span className="brk b1" /><span className="brk b2" /><span className="brk b3" /><span className="brk b4" />
         <Ic name="camera" />
       </div>
-      <p className="sub" style={{ marginTop: 12 }}>{!faceReady ? "Face not registered. Please contact admin." : !locationReady ? "Location not assigned. Please contact admin." : "Center your face in the frame — verification is automatic."}</p>
+      <p className="sub" style={{ marginTop: 12 }}>{!faceReady ? (status?.face_status?.pending ? "Your face is waiting for approval." : caps?.can_self_register_face ? "Face not registered. Register your face below." : "Face not registered. Please contact admin.") : !locationReady ? "Location not assigned. Please contact admin." : "Center your face in the frame — verification is automatic."}</p>
+      {faceReady && locationReady && <p className="sub" style={{ marginTop: 4, fontSize: 11.5 }}>Your face photo, device and location are recorded to verify attendance.</p>}
+      {!faceReady && caps?.can_self_register_face && <div style={{ marginTop: 12 }}><button className="btn" type="button" onClick={() => open?.("selfFace")}><Ic name="camera" /> {status?.face_status?.pending ? "Send a new face photo" : "Register my face"}</button></div>}
       {!completed && <div style={{ marginTop: 16 }}>
         <button className={`btn ${nextType === "IN" ? "ok" : ""}`} type="button" disabled={!canUseAction} onClick={() => openVerify(nextType)}><Ic name="check" /> Verify &amp; mark {nextType === "IN" ? "in" : "out"}</button>
       </div>}
@@ -950,69 +1195,83 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange }: an
   );
 }
 
-function History() {
-  // Default view = CURRENT month (1st → today). Users can pick any From–To range
-  // (e.g. last month) via the presets or the date fields.
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const iso = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  const now = new Date();
-  const monthStart = iso(new Date(now.getFullYear(), now.getMonth(), 1));
-  const todayStr = iso(now);
-  const [from, setFrom] = useState(monthStart);
-  const [to, setTo] = useState(todayStr);
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(false);
-  const load = async (f: string, t: string) => {
-    setLoading(true);
-    try { setData(await call(API.getAttendanceHistory, { from_date: f, to_date: t })); }
-    catch { setData({ checkins: [], attendance: [] }); }
-    finally { setLoading(false); }
-  };
-  useEffect(() => { load(monthStart, todayStr); }, []);
-  const applyRange = (f: string, t: string) => { setFrom(f); setTo(t); load(f, t); };
-  const lastMonth = () => applyRange(
-    iso(new Date(now.getFullYear(), now.getMonth() - 1, 1)),
-    iso(new Date(now.getFullYear(), now.getMonth(), 0)),
-  );
-  const isThisMonth = from === monthStart && to === todayStr;
-  const presetStyle = (active: boolean) => ({ flex: 1, padding: "9px 0", borderRadius: 10, border: "none", background: active ? "var(--iris)" : "var(--iris-tint)", color: active ? "#fff" : "var(--iris)", fontWeight: 600, fontSize: 12.5, cursor: "pointer" } as const);
+function attendanceStatusLabel(a: any) {
+  // Present is Present, full stop - no "(Missing Mark Out)" / "(Early Going)" /
+  // etc. suffix, regardless of how the day got resolved. Only non-Present
+  // statuses (Half Day, Absent) still show what caused them, since that's the
+  // useful part there.
+  if (String(a.status || "").toLowerCase() === "present") return a.status;
+  const tags: string[] = [];
+  if (a.regularization_issue_type) tags.push(a.regularization_issue_type);
+  else {
+    if (a.late_entry) tags.push("Late Coming");
+    if (a.early_exit) tags.push("Early Going");
+  }
+  return tags.length ? `${a.status} (${tags.join(", ")})` : a.status;
+}
+
+function attendanceChipKind(status: string) {
+  const s = String(status || "").toLowerCase();
+  if (s.includes("present")) return "ok";
+  if (s.includes("absent")) return "err";
+  return "pend";
+}
+
+function History({ data }: any) {
   const checkins = data?.checkins || [];
   const attendance = data?.attendance || [];
   const present = attendance.filter((a: any) => String(a.status).toLowerCase().includes("present")).length;
+  const attendanceByDate: Record<string, any> = {};
+  attendance.forEach((a: any) => { attendanceByDate[String(a.attendance_date)] = a; });
   return <>
     <div className="grid2">
-      <Stat icon="check" label="Present" value={present || 0} small={attendance.length ? `/${attendance.length}` : ""} />
+      <Stat icon="check" label="Present" value={present || attendance.length || 0} small={attendance.length ? `/${attendance.length}` : ""} />
       <Stat icon="clock" label="Records" value={checkins.length} />
     </div>
-    <div className="card" style={{ marginTop: 12 }}>
-      <div style={{ display: "flex", gap: 8 }}>
-        <button type="button" style={presetStyle(isThisMonth)} onClick={() => applyRange(monthStart, todayStr)}>This month</button>
-        <button type="button" style={presetStyle(false)} onClick={lastMonth}>Last month</button>
-      </div>
-      <div className="grid2" style={{ marginTop: 12 }}>
-        <Field label="From" icon="calendar" type="date" value={from} max={todayStr} onChange={(v: string) => { setFrom(v); if (to && v && to < v) setTo(v); }} />
-        <Field label="To" icon="calendar" type="date" value={to} min={from} max={todayStr} onChange={(v: string) => setTo(v)} />
-      </div>
-      <div style={{ marginTop: 12 }}><button className="btn" type="button" disabled={loading || !from || !to || from > to} onClick={() => load(from, to)}><Ic name="clock" /> {loading ? "Loading…" : "Show"}</button></div>
-      {from > to && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 4 }}>From date cannot be after To date.</div>}
-    </div>
-    <div className="sec-lab">Checkins · {fmtDMY(from)} → {fmtDMY(to)}</div>
+    <div className="sec-lab">Recent checkins</div>
     <div className="card list" style={{ padding: "4px 15px" }}>
-      {loading ? <div className="empty"><p>Loading…</p></div> : checkins.length ? checkins.map((row: any) => (
-        <div className="row" key={row.name}><div className="date" style={{ width: 76 }}>{fmtDMY(row.time)}</div><div className="mid"><strong>{row.log_type}</strong><span>{String(row.time).slice(11, 16)}</span></div><Chip kind="ok">Synced</Chip></div>
-      )) : <div className="empty"><h3>No records</h3><p>No attendance records in this period.</p></div>}
+      {checkins.length ? checkins.map((row: any) => {
+        const a = attendanceByDate[String(row.time).slice(0, 10)];
+        return <div className="row" key={row.name}><div className="date" style={{ width: 76 }}>{fmtDMY(row.time)}</div><div className="mid"><strong>{row.log_type}</strong><span>{String(row.time).slice(11, 16)}</span></div><Chip kind={a ? attendanceChipKind(a.status) : "pend"}>{a ? attendanceStatusLabel(a) : "Pending"}</Chip></div>;
+      }) : <div className="empty"><h3>No records</h3><p>No attendance records found.</p></div>}
     </div>
   </>;
 }
 
 function Leave({ data, caps, flash, reload, me }: any) {
-  const [form, setForm] = useState({ employee: "", leave_type: "", from_date: "", to_date: "", reason: "", half_day: false, half_day_date: "", half_day_type: "First Half" });
+  const [form, setForm] = useState({ employee: "", leave_type: "", from_date: "", to_date: "", reason: "", half_day: false, half_day_date: "", half_day_type: "First Half", attachment: "" });
+  const [attachmentName, setAttachmentName] = useState("");
+  const [attachmentBusy, setAttachmentBusy] = useState(false);
+  const onAttachmentChange = async (e: any) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setAttachmentBusy(true);
+    try {
+      const url = await uploadFile(file);
+      setForm((f: any) => ({ ...f, attachment: url }));
+      setAttachmentName(file.name);
+    } catch (err) {
+      flash("Upload failed", cleanErrorMessage(err));
+    } finally {
+      setAttachmentBusy(false);
+    }
+  };
+  const clearAttachment = () => { setForm((f: any) => ({ ...f, attachment: "" })); setAttachmentName(""); };
+  const [detail, setDetail] = useState<any>(null);
+  const [waShare, setWaShare] = useState<any>(null);
   const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
-  const canSelectEmployee = Boolean(caps?.can_view_admin);
-  // Employees can't apply for past dates (backend also blocks it); admins may
-  // back-date on behalf of others. "To" can never be before "From".
-  const todayStr = (() => { const d = new Date(); const p = (n: number) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; })();
-  const minFrom = canSelectEmployee ? undefined : todayStr;
+  const canSelectEmployee = Boolean(caps?.can_apply_leave_for_others);
+  // Employees can back-date up to LEAVE_BACKDATE_ALLOWED_DAYS (forgot to apply, or
+  // applying same-morning for today) - backend enforces the same limit, and routes
+  // any such application straight to HR instead of Dept Head/MD. Admins may
+  // back-date further on behalf of others. "To" can never be before "From".
+  const LEAVE_BACKDATE_ALLOWED_DAYS = 7;
+  const toISODate = (d: Date) => { const p = (n: number) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
+  const todayStr = toISODate(new Date());
+  const earliestBackdateStr = (() => { const d = new Date(); d.setDate(d.getDate() - LEAVE_BACKDATE_ALLOWED_DAYS); return toISODate(d); })();
+  const minFrom = canSelectEmployee ? undefined : earliestBackdateStr;
+  const isUrgent = !!(form.from_date && form.from_date <= todayStr);
   // Setting From also drags To forward if To is now earlier than From.
   const setFromDate = (v: string) => setForm((f: any) => ({ ...f, from_date: v, to_date: f.to_date && v && f.to_date < v ? v : f.to_date }));
   // Default the employee to the logged-in user. Admins can change it; a plain
@@ -1023,6 +1282,18 @@ function Leave({ data, caps, flash, reload, me }: any) {
   // Half day is only valid for a single-day leave (From === To). Force it off otherwise.
   const singleDay = !!(form.from_date && form.to_date && form.from_date === form.to_date);
   useEffect(() => { if (!singleDay && form.half_day) setForm((f: any) => ({ ...f, half_day: false, half_day_date: "" })); }, [singleDay]);
+  // Requested day count, mirroring the backend's own calc (api.py _check_casual_monthly_cap):
+  // half day = 0.5, otherwise inclusive day span. Casual Leave is disabled beyond the cap.
+  const requestedDays = form.half_day && singleDay
+    ? 0.5
+    : (form.from_date && form.to_date ? Math.round((new Date(form.to_date).getTime() - new Date(form.from_date).getTime()) / 86400000) + 1 : 0);
+  // If Casual Leave is selected and the range grows past the cap (e.g. extending
+  // "To" after picking CL for a short leave), clear the now-invalid selection.
+  useEffect(() => {
+    const selected = (data.selectable || []).find((t: any) => t.leave_type === form.leave_type);
+    const isCasual = String(selected?.leave_type_name || selected?.leave_type || "").toLowerCase() === "casual leave";
+    if (isCasual && requestedDays > CASUAL_LEAVE_MONTHLY_CAP) setForm((f: any) => ({ ...f, leave_type: "" }));
+  }, [requestedDays]);
   const submit = async () => {
     const missing: string[] = [];
     if (!form.leave_type) missing.push("Leave type");
@@ -1039,10 +1310,15 @@ function Leave({ data, caps, flash, reload, me }: any) {
       await reload();
       return response;
     }, { successTitle: "Leave submitted", errorTitle: "Leave failed" });
-    if (result) setForm({ employee: me?.employee || "", leave_type: "", from_date: "", to_date: "", reason: "", half_day: false, half_day_date: "", half_day_type: "First Half" });
+    if (result) { setForm({ employee: me?.employee || "", leave_type: "", from_date: "", to_date: "", reason: "", half_day: false, half_day_date: "", half_day_type: "First Half", attachment: "" }); setAttachmentName(""); if ((result as any).whatsapp?.text) setWaShare((result as any).whatsapp); }
   };
   const cancelLeave = async (name: string) => {
-    await runAction(`cancel-${name}`, async () => { await call(API.cancelLeave, { name }); reload(); }, { successTitle: "Leave cancelled", successMessage: "Leave request updated.", errorTitle: "Cancel failed" });
+    // reload() runs even on failure (e.g. "this request no longer exists") so a
+    // stale row referencing an already-deleted record clears itself from the
+    // list instead of staying stuck there for the user to keep tapping.
+    const res: any = await runAction(`cancel-${name}`, async () => await call(API.cancelLeave, { name }), { successTitle: "Leave cancelled", successMessage: "Leave request updated.", errorTitle: "Cancel failed" });
+    reload();
+    if (res?.whatsapp?.text) setWaShare({ ...res.whatsapp, title: "Leave cancelled" });
   };
   const balances = data.balances || [];
   const selectable = data.selectable || [];
@@ -1063,31 +1339,490 @@ function Leave({ data, caps, flash, reload, me }: any) {
       {canSelectEmployee
         ? <Select label="Employee" value={form.employee} onChange={(v: string) => setForm({ ...form, employee: v })} options={(data.employees || []).map((e: any) => ({ value: e.name, label: e.employee_name || e.name, description: e.description || e.name }))} />
         : <div className="field"><label>Employee</label><div className="inp" style={{ opacity: 0.9 }}><Ic name="user" /><span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{me?.employee_name || me?.employee || "You"}</span></div></div>}
-      <Select label="Leave type" value={form.leave_type} onChange={(v: string) => setForm({ ...form, leave_type: v })} options={buildLeaveTypeOptions(data.selectable, data.types)} />
+      <Select label="Leave type" value={form.leave_type} onChange={(v: string) => setForm({ ...form, leave_type: v })} options={buildLeaveTypeOptions(data.selectable, data.types, requestedDays)} />
+      <div style={{ fontSize: 11, color: "var(--faint)", marginTop: 4 }}>You can take up to {CASUAL_LEAVE_MONTHLY_CAP} Casual Leave days and unlimited Privilege Leave (balance permitting) per month.</div>
       {balanceHint && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 4 }}>{balanceHint}</div>}
       <div className="grid2" style={{ marginTop: 13 }}>
         <Field label="From" icon="calendar" type="date" value={form.from_date} min={minFrom} onChange={setFromDate} />
         <Field label="To" icon="calendar" type="date" value={form.to_date} min={form.from_date || minFrom} onChange={(v: string) => setForm({ ...form, to_date: v })} />
       </div>
+      {null}
       <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 13, color: "var(--muted)", fontSize: 12.5, fontWeight: 600, opacity: singleDay ? 1 : 0.5 }}>
         <input type="checkbox" style={{ accentColor: "var(--iris)" }} disabled={!singleDay} checked={form.half_day} onChange={(e) => setForm({ ...form, half_day: e.target.checked, half_day_date: e.target.checked ? form.from_date : "" })} /> Half day
       </label>
       {!singleDay && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 4 }}>Half day only for a single-day leave (From and To same day).</div>}
       {form.half_day && singleDay && <Select label="Half day type" value={form.half_day_type} onChange={(v: string) => setForm({ ...form, half_day_type: v })} options={["First Half", "Second Half"]} />}
       <Field label="Reason" value={form.reason} onChange={(v: string) => setForm({ ...form, reason: v })} placeholder="Add a short note (optional)" />
+      <div className="field">
+        <label>Attachment (optional)</label>
+        <div className="inp" style={{ justifyContent: "space-between" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0, cursor: attachmentBusy ? "default" : "pointer" }}>
+            <Ic name="paperclip" />
+            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: attachmentName ? "inherit" : "var(--faint)" }}>
+              {attachmentBusy ? "Uploading…" : (attachmentName || "Attach medical certificate, etc.")}
+            </span>
+            <input type="file" accept="image/*,.pdf" style={{ display: "none" }} onChange={onAttachmentChange} disabled={attachmentBusy} />
+          </label>
+          {form.attachment && !attachmentBusy && <button type="button" className="ibtn" aria-label="Remove attachment" onClick={clearAttachment}><Ic name="close" /></button>}
+        </div>
+      </div>
       <div style={{ marginTop: 16 }}><button className="btn" type="button" disabled={isAnyBusy} onClick={submit}><Ic name="check" /> {isBusy("submit-leave") ? "Submitting…" : "Submit leave request"}</button></div>
     </div>
     <div className="sec-lab">My requests</div>
     {(data.leaves || []).length ? data.leaves.map((l: any) => {
       const st = l.approval_status || l.jew_hrms_approval_status || l.status;
       const kind = statusChipKind(st);
-      return <div className="qrow" key={l.name}>
+      return <div className="qrow" key={l.name} role="button" tabIndex={0} style={{ cursor: "pointer" }} onClick={() => setDetail(l)} onKeyDown={(e) => { if (e.key === "Enter") setDetail(l); }}>
         <div className="qa"><Ic name={kind === "ok" ? "check" : kind === "err" ? "close" : "clock"} /></div>
         <div className="qt"><strong>{l.leave_type}{l.half_day ? " · Half day" : ""}</strong><span>{fmtDMY(l.from_date)} → {fmtDMY(l.to_date)}</span></div>
         {/approved|reject|cancel/i.test(st) ? <Chip kind={kind}>{st}</Chip>
-          : <button className="btn danger sm" style={{ width: "auto", padding: "0 12px" }} type="button" disabled={isAnyBusy} onClick={() => cancelLeave(l.name)}>{isBusy(`cancel-${l.name}`) ? "…" : "Cancel"}</button>}
+          : <button className="btn danger sm" style={{ width: "auto", padding: "0 12px" }} type="button" disabled={isAnyBusy} onClick={(e) => { e.stopPropagation(); cancelLeave(l.name); }}>{isBusy(`cancel-${l.name}`) ? "…" : "Cancel"}</button>}
       </div>;
     }) : <div className="empty"><h3>No requests</h3><p>No leave requests yet.</p></div>}
+    {waShare && <WhatsAppSheet wa={waShare} flash={flash} heading={waShare.title || "Leave submitted"} onClose={() => setWaShare(null)} />}
+    {detail && <LeaveDetailSheet leave={detail} data={data} flash={flash} onClose={() => setDetail(null)}
+      onCancelLeave={async (name: string) => { await cancelLeave(name); setDetail(null); }}
+      onSaved={async (w?: any) => { setDetail(null); await reload(); if (w?.text) setWaShare(w); }} />}
+  </>;
+}
+
+function LeaveDetailSheet({ leave, data, flash, onClose, onCancelLeave, onSaved }: any) {
+  const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
+  const [editMode, setEditMode] = useState(false);
+  const [form, setForm] = useState<any>({
+    leave_type: leave.leave_type || "", from_date: leave.from_date || "", to_date: leave.to_date || "",
+    half_day: !!leave.half_day, half_day_date: leave.half_day_date || leave.from_date || "",
+    half_day_type: leave.custom_half_day_type || "First Half", reason: leave.description || "", attachment: leave.attachment || ""
+  });
+  const [attachmentName, setAttachmentName] = useState(leave.attachment ? String(leave.attachment).split("/").pop() : "");
+  const [attachmentBusy, setAttachmentBusy] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewType, setPreviewType] = useState("");
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [waShare, setWaShare] = useState<any>(null);
+  const openWhatsApp = async (kind?: string) => {
+    const r: any = await runAction("leave-whatsapp", async () => kind ? call(API.getRequestWhatsapp, { kind, name: leave.name }) : call(API.getLeaveWhatsapp, { name: leave.name }), { errorTitle: "WhatsApp" });
+    if (r?.whatsapp?.text) setWaShare(r.whatsapp);
+  };
+  const [cancelReqMode, setCancelReqMode] = useState(false);
+  const [cancelForm, setCancelForm] = useState({ from_date: leave.from_date || "", to_date: leave.to_date || "", reason: "" });
+  const isCancelPending = leave.jew_cancel_status === "Pending HR Approval";
+  const closePreview = () => { if (previewUrl) URL.revokeObjectURL(previewUrl); setPreviewUrl(null); setPreviewType(""); };
+  useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
+  const viewAttachment = async () => {
+    if (!leave.attachment || previewBusy) return;
+    setPreviewBusy(true);
+    try {
+      const res = await fetch(leave.attachment, { credentials: "include" });
+      if (!res.ok) throw new Error("Unable to load attachment.");
+      const blob = await res.blob();
+      setPreviewUrl(URL.createObjectURL(blob));
+      setPreviewType(blob.type || "");
+    } catch (err) {
+      flash("Attachment failed", cleanErrorMessage(err));
+    } finally {
+      setPreviewBusy(false);
+    }
+  };
+  const singleDay = !!(form.from_date && form.to_date && form.from_date === form.to_date);
+  useEffect(() => { if (!singleDay && form.half_day) setForm((f: any) => ({ ...f, half_day: false, half_day_date: "" })); }, [singleDay]);
+  const requestedDays = form.half_day && singleDay
+    ? 0.5
+    : (form.from_date && form.to_date ? Math.round((new Date(form.to_date).getTime() - new Date(form.from_date).getTime()) / 86400000) + 1 : 0);
+  const onAttachmentChange = async (e: any) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setAttachmentBusy(true);
+    try {
+      const url = await uploadFile(file);
+      setForm((f: any) => ({ ...f, attachment: url }));
+      setAttachmentName(file.name);
+    } catch (err) {
+      flash("Upload failed", cleanErrorMessage(err));
+    } finally {
+      setAttachmentBusy(false);
+    }
+  };
+  const st = leave.approval_status || leave.jew_hrms_approval_status || leave.status;
+  const kind = statusChipKind(st);
+  const save = async () => {
+    if (!form.leave_type || !form.from_date || !form.to_date) { flash("Required fields", "Leave type, From date and To date are required."); return; }
+    if (form.from_date > form.to_date) { flash("Invalid dates", "From Date cannot be after To Date."); return; }
+    const result = await runAction("save-leave-edit", async () => {
+      const payload = { name: leave.name, ...form, half_day_date: form.half_day ? form.from_date : "" };
+      return await call(API.updateLeave, payload);
+    }, { successTitle: "Leave updated", errorTitle: "Update failed" });
+    if (result) await onSaved();
+  };
+  const requestCancellation = async () => {
+    if (!cancelForm.from_date || !cancelForm.to_date) { flash("Required fields", "From date and To date are required."); return; }
+    if (cancelForm.from_date > cancelForm.to_date) { flash("Invalid dates", "From Date cannot be after To Date."); return; }
+    if (!cancelForm.reason.trim()) { flash("Reason required", "Please enter a reason for the cancellation."); return; }
+    const result = await runAction("request-cancel", async () => {
+      return await call(API.requestLeaveCancellation, { name: leave.name, from_date: cancelForm.from_date, to_date: cancelForm.to_date, reason: cancelForm.reason });
+    }, { successTitle: "Cancellation requested", successMessage: "Sent to HR for approval.", errorTitle: "Request failed" });
+    if (result) await onSaved((result as any).whatsapp?.text ? { ...(result as any).whatsapp, title: "Cancellation request sent" } : undefined);
+  };
+  return <>
+    {waShare && <WhatsAppSheet wa={waShare} flash={flash} onClose={() => setWaShare(null)} />}
+    {createPortal(
+    <div className="sheet-layer" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget && !isAnyBusy) onClose(); }}>
+      <div className="sheet" role="dialog" aria-modal="true" aria-label="Leave request">
+        <div className="sheet-head"><strong>{editMode ? "Edit leave request" : cancelReqMode ? "Request cancellation" : "Leave request"}</strong><button className="ibtn" type="button" aria-label="Close" disabled={isAnyBusy} onClick={onClose}><Ic name="close" /></button></div>
+        <div className="sheet-body">
+          {!editMode && !cancelReqMode ? <>
+            <div className="sheet-row"><span>Leave type</span><span>{leave.leave_type}</span></div>
+            <div className="sheet-row"><span>Dates</span><span>{fmtDMY(leave.from_date)} → {fmtDMY(leave.to_date)}{leave.half_day ? " · Half day" : ""}</span></div>
+            <div className="sheet-row"><span>Status</span><span><Chip kind={kind}>{st}</Chip></span></div>
+            {leave.description && <div className="sheet-row"><span>Reason</span><span>{leave.description}</span></div>}
+            {leave.reject_reason && <div className="sheet-row"><span>Reject reason</span><span>{leave.reject_reason}</span></div>}
+            {leave.attachment && <div className="sheet-row"><span>Attachment</span><span><button type="button" onClick={viewAttachment} disabled={previewBusy} style={{ background: "none", border: "none", padding: 0, color: "var(--iris)", fontWeight: 600, fontSize: "inherit", cursor: previewBusy ? "default" : "pointer" }}>{previewBusy ? "Loading…" : "View file"}</button></span></div>}
+            {isCancelPending && <div className="sheet-row"><span>Cancellation</span><span><Chip kind="pend">Pending HR Approval</Chip></span></div>}
+            {leave.jew_cancel_status === "Rejected" && leave.jew_cancel_remarks && <div className="sheet-row"><span>Cancellation rejected</span><span>{leave.jew_cancel_remarks}</span></div>}
+            <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+              {leave.editable && <button className="btn" type="button" style={{ flex: 1 }} onClick={() => setEditMode(true)}><Ic name="pen" /> Edit</button>}
+              {/approved/i.test(st) && !isCancelPending && <button className="btn ghost" type="button" style={{ flex: 1 }} onClick={() => { setCancelForm({ from_date: leave.from_date, to_date: leave.to_date, reason: "" }); setCancelReqMode(true); }}>Request cancellation</button>}
+              {!/approved|reject|cancel/i.test(st) && <button className="btn danger" type="button" style={{ flex: 1 }} disabled={isAnyBusy} onClick={() => onCancelLeave(leave.name)}>Cancel request</button>}
+            </div>
+            {!/reject/i.test(st) && <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+              {/cancel/i.test(st)
+                ? <button className="btn ghost" type="button" disabled={isAnyBusy} onClick={() => openWhatsApp("leave_cancelled")}><Ic name="send" /> {isBusy("leave-whatsapp") ? "Preparing…" : "Send cancelled message to WhatsApp"}</button>
+                : <>
+                    <button className="btn ghost" type="button" disabled={isAnyBusy} onClick={() => openWhatsApp()}><Ic name="send" /> {isBusy("leave-whatsapp") ? "Preparing…" : "Send to WhatsApp group"}</button>
+                    {isCancelPending && <button className="btn ghost" type="button" disabled={isAnyBusy} onClick={() => openWhatsApp("leave_cancel_request")}><Ic name="send" /> Send cancellation request to WhatsApp</button>}
+                  </>}
+            </div>}
+          </> : editMode ? <>
+            <Select label="Leave type" value={form.leave_type} onChange={(v: string) => setForm({ ...form, leave_type: v })} options={buildLeaveTypeOptions(data.selectable, data.types, requestedDays)} />
+            <div className="grid2" style={{ marginTop: 13 }}>
+              <Field label="From" icon="calendar" type="date" value={form.from_date} onChange={(v: string) => setForm((f: any) => ({ ...f, from_date: v, to_date: f.to_date && v && f.to_date < v ? v : f.to_date }))} />
+              <Field label="To" icon="calendar" type="date" value={form.to_date} min={form.from_date} onChange={(v: string) => setForm({ ...form, to_date: v })} />
+            </div>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 13, color: "var(--muted)", fontSize: 12.5, fontWeight: 600, opacity: singleDay ? 1 : 0.5 }}>
+              <input type="checkbox" style={{ accentColor: "var(--iris)" }} disabled={!singleDay} checked={form.half_day} onChange={(e) => setForm({ ...form, half_day: e.target.checked, half_day_date: e.target.checked ? form.from_date : "" })} /> Half day
+            </label>
+            {form.half_day && singleDay && <Select label="Half day type" value={form.half_day_type} onChange={(v: string) => setForm({ ...form, half_day_type: v })} options={["First Half", "Second Half"]} />}
+            <Field label="Reason" value={form.reason} onChange={(v: string) => setForm({ ...form, reason: v })} placeholder="Add a short note (optional)" />
+            <div className="field">
+              <label>Attachment (optional)</label>
+              <div className="inp" style={{ justifyContent: "space-between" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0, cursor: attachmentBusy ? "default" : "pointer" }}>
+                  <Ic name="paperclip" />
+                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: attachmentName ? "inherit" : "var(--faint)" }}>
+                    {attachmentBusy ? "Uploading…" : (attachmentName || "Attach medical certificate, etc.")}
+                  </span>
+                  <input type="file" accept="image/*,.pdf" style={{ display: "none" }} onChange={onAttachmentChange} disabled={attachmentBusy} />
+                </label>
+                {form.attachment && !attachmentBusy && <button type="button" className="ibtn" aria-label="Remove attachment" onClick={() => { setForm((f: any) => ({ ...f, attachment: "" })); setAttachmentName(""); }}><Ic name="close" /></button>}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+              <button className="btn ghost" type="button" style={{ flex: 1 }} disabled={isAnyBusy} onClick={() => setEditMode(false)}>Discard</button>
+              <button className="btn" type="button" style={{ flex: 1 }} disabled={isAnyBusy || attachmentBusy} onClick={save}><Ic name="check" /> {isBusy("save-leave-edit") ? "Saving…" : "Save changes"}</button>
+            </div>
+          </> : <>
+            <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 4 }}>Approved period: {fmtDMY(leave.from_date)} → {fmtDMY(leave.to_date)}. Cancel the whole leave, or just part of it.</div>
+            <div className="grid2">
+              <Field label="Cancel from" icon="calendar" type="date" value={cancelForm.from_date} min={leave.from_date} max={leave.to_date} onChange={(v: string) => setCancelForm((f: any) => ({ ...f, from_date: v, to_date: f.to_date && v && f.to_date < v ? v : f.to_date }))} />
+              <Field label="Cancel to" icon="calendar" type="date" value={cancelForm.to_date} min={cancelForm.from_date || leave.from_date} max={leave.to_date} onChange={(v: string) => setCancelForm({ ...cancelForm, to_date: v })} />
+            </div>
+            <Field label="Reason" value={cancelForm.reason} onChange={(v: string) => setCancelForm({ ...cancelForm, reason: v })} placeholder="Why are you cancelling?" />
+            <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+              <button className="btn ghost" type="button" style={{ flex: 1 }} disabled={isAnyBusy} onClick={() => setCancelReqMode(false)}>Discard</button>
+              <button className="btn" type="button" style={{ flex: 1 }} disabled={isAnyBusy} onClick={requestCancellation}><Ic name="check" /> {isBusy("request-cancel") ? "Sending…" : "Send to HR"}</button>
+            </div>
+          </>}
+        </div>
+      </div>
+    </div>, document.body)}
+    {previewUrl && createPortal(
+      <div className="sheet-layer" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) closePreview(); }}>
+        <div className="sheet" role="dialog" aria-modal="true" aria-label="Attachment preview">
+          <div className="sheet-head"><strong>Attachment</strong><button className="ibtn" type="button" aria-label="Close" onClick={closePreview}><Ic name="close" /></button></div>
+          <div className="sheet-body" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+            {previewType.startsWith("image/")
+              ? <img src={previewUrl} alt="Attachment" style={{ maxWidth: "100%", borderRadius: 12 }} />
+              : <iframe src={previewUrl} title="Attachment" style={{ width: "100%", height: "60dvh", border: "none", borderRadius: 12, background: "#fff" }} />}
+            <a href={previewUrl} download="attachment" className="btn ghost sm" style={{ width: "auto", padding: "0 16px" }}>Download</a>
+          </div>
+        </div>
+      </div>, document.body)}
+  </>;
+}
+
+function TypeToggle({ label, value, onChange, options }: any) {
+  // A plain checkbox-style pair of buttons for a 2-option choice — the searchable
+  // dropdown modal used elsewhere is overkill when there are only two options to
+  // pick from; tap either one directly.
+  return <div className="field">
+    <label>{label}</label>
+    <div style={{ display: "flex", gap: 9 }}>
+      {options.map((o: any) => {
+        const val = typeof o === "string" ? o : o.value;
+        const optLabel = typeof o === "string" ? o : o.label;
+        const disabled = typeof o === "string" ? false : !!o.disabled;
+        const note = typeof o === "string" ? "" : o.description;
+        const selected = value === val;
+        return <button key={val} type="button" disabled={disabled}
+          className={`btn sm ${selected ? "" : "ghost"}`}
+          style={{ flex: 1, opacity: disabled ? 0.45 : 1 }}
+          onClick={() => { if (!disabled) onChange(val); }}>
+          {optLabel}{note ? ` (${note})` : ""}
+        </button>;
+      })}
+    </div>
+  </div>;
+}
+
+function LateEarly({ data, flash, reload }: any) {
+  const [form, setForm] = useState({ application_type: "Late Coming", application_date: "", expected_time: "", reason: "" });
+  const [justSubmitted, setJustSubmitted] = useState<any>(null);
+  const wa = useRequestWhatsApp("late_early", flash);
+  const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
+  const submit = async () => {
+    if (!form.application_date || !form.expected_time || !form.reason) { flash("Required fields", "Date, expected time and reason are required."); return; }
+    setJustSubmitted(null);
+    const submittedForm = form;
+    const result = await runAction("submit-late-early", async () => {
+      const response = await call(API.applyLateEarly, form);
+      await reload();
+      return response;
+    }, { successTitle: "Application submitted", errorTitle: "Application failed" });
+    if (result) {
+      setForm({ application_type: "Late Coming", application_date: "", expected_time: "", reason: "" });
+      setJustSubmitted(submittedForm);
+      if ((result as any).whatsapp?.text) wa.setWaShare({ ...(result as any).whatsapp, title: "Request submitted" });
+    }
+  };
+  const cancelApplication = async (name: string) => {
+    const res: any = await runAction(`cancel-${name}`, async () => { const r = await call(API.cancelLateEarly, { name }); reload(); return r; }, { successTitle: "Cancelled", successMessage: "Application cancelled.", errorTitle: "Cancel failed" });
+    if (res?.whatsapp?.text) wa.setWaShare({ ...res.whatsapp, title: "Application cancelled" });
+  };
+  const requestCancellation = async (name: string) => {
+    const reason = window.prompt("Reason for cancellation") || "";
+    if (!reason.trim()) { flash("Reason required", "Please enter a reason for the cancellation."); return; }
+    const res: any = await runAction(`requestcancel-${name}`, async () => { const r = await call(API.requestLateEarlyCancellation, { name, reason }); reload(); return r; }, { successTitle: "Cancellation requested", successMessage: "Sent to HR for approval.", errorTitle: "Request failed" });
+    if (res?.whatsapp?.text) wa.setWaShare({ ...res.whatsapp, title: "Cancellation request sent" });
+  };
+  const applications = data.applications || [];
+  const thisMonth = today().slice(0, 7);
+  const activeThisMonth = (type: string) => applications.filter((a: any) => a.application_type === type && ["Pending", "Pending HR", "Approved"].includes(a.status) && String(a.application_date || "").startsWith(thisMonth)).length;
+  const usedLateComing = activeThisMonth("Late Coming");
+  const usedEarlyGoing = activeThisMonth("Early Going");
+  const LATE_EARLY_MONTHLY_CAP = 2;
+  // If the selected type just hit its cap (e.g. a request was submitted while this
+  // screen was open), clear the selection rather than leave a disabled type chosen.
+  useEffect(() => {
+    const capped = (form.application_type === "Late Coming" && usedLateComing >= LATE_EARLY_MONTHLY_CAP)
+      || (form.application_type === "Early Going" && usedEarlyGoing >= LATE_EARLY_MONTHLY_CAP);
+    if (capped) setForm((f: any) => ({ ...f, application_type: "" }));
+  }, [usedLateComing, usedEarlyGoing]);
+  return <>
+    {justSubmitted && <div className="card" style={{ marginBottom: 12, borderColor: "var(--ok, #1a7f45)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div className="qa" style={{ width: 34, height: 34, borderRadius: 10, background: "var(--ok-bg, #eaf6ee)", color: "var(--ok, #1a7f45)", display: "grid", placeItems: "center" }}><Ic name="check" style={{ width: 16, height: 16 }} /></div>
+        <div style={{ flex: 1 }}>
+          <strong style={{ fontSize: 13.5 }}>Submitted</strong>
+          <div style={{ fontSize: 11.5, color: "var(--faint)" }}>{justSubmitted.application_type} · {fmtDMY(justSubmitted.application_date)} · pending Department Head review</div>
+        </div>
+      </div>
+    </div>}
+    <div className="card accent" style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <div style={{ flex: 1 }}><Chip kind={usedLateComing >= LATE_EARLY_MONTHLY_CAP ? "err" : "pend"} icon="clock">Late Coming: {usedLateComing} of {LATE_EARLY_MONTHLY_CAP}</Chip></div>
+      <div style={{ flex: 1 }}><Chip kind={usedEarlyGoing >= LATE_EARLY_MONTHLY_CAP ? "err" : "pend"} icon="clock">Early Going: {usedEarlyGoing} of {LATE_EARLY_MONTHLY_CAP}</Chip></div>
+    </div>
+    <div className="card" style={{ marginTop: 12 }}>
+      <TypeToggle label="Type" value={form.application_type} onChange={(v: string) => setForm({ ...form, application_type: v })} options={[
+        { value: "Late Coming", label: "Late Coming", disabled: usedLateComing >= LATE_EARLY_MONTHLY_CAP, description: usedLateComing >= LATE_EARLY_MONTHLY_CAP ? "Limit reached" : "" },
+        { value: "Early Going", label: "Early Going", disabled: usedEarlyGoing >= LATE_EARLY_MONTHLY_CAP, description: usedEarlyGoing >= LATE_EARLY_MONTHLY_CAP ? "Limit reached" : "" },
+      ]} />
+      <div style={{ fontSize: 11, color: "var(--faint)", marginTop: 4 }}>You can request up to {LATE_EARLY_MONTHLY_CAP} Late Coming and {LATE_EARLY_MONTHLY_CAP} Early Going per month.</div>
+      <div className="grid2" style={{ marginTop: 13 }}>
+        <Field label="Date" icon="calendar" type="date" value={form.application_date} onChange={(v: string) => setForm({ ...form, application_date: v })} />
+        <Field label="Expected time" icon="clock" type="time" value={form.expected_time} onChange={(v: string) => setForm({ ...form, expected_time: v })} />
+      </div>
+      <Field label="Reason" value={form.reason} onChange={(v: string) => setForm({ ...form, reason: v })} placeholder="Why will you be late / need to leave early" />
+      <div style={{ marginTop: 16 }}><button className="btn" type="button" disabled={isAnyBusy} onClick={submit}><Ic name="check" /> {isBusy("submit-late-early") ? "Submitting…" : "Submit application"}</button></div>
+    </div>
+    <div className="sec-lab">My requests</div>
+    {applications.length ? applications.map((a: any) => {
+      const kind = statusChipKind(a.status);
+      return <div className="qrow" key={a.name}>
+        <div className="qa"><Ic name={kind === "ok" ? "check" : kind === "err" ? "close" : "clock"} /></div>
+        <div className="qt"><strong>{a.application_type}</strong><span>{fmtDMY(a.application_date)} · {a.expected_time}</span></div>
+        {!/reject/i.test(String(a.status)) && (() => {
+          const cancelled = /cancel/i.test(String(a.status)), pending = a.status === "Approved" && a.jew_cancel_status === "Pending HR Approval";
+          const k = cancelled ? "late_early_cancelled" : pending ? "late_early_cancel_request" : "late_early";
+          return <WaButton busy={wa.waBusy === a.name} label={cancelled ? "Send cancelled message to WhatsApp group" : pending ? "Send cancellation request to WhatsApp group" : undefined} onClick={() => wa.openWa(a.name, k)} />;
+        })()}
+        {a.status === "Pending" ? <button className="btn danger sm" style={{ width: "auto", padding: "0 12px" }} type="button" disabled={isAnyBusy} onClick={() => cancelApplication(a.name)}>{isBusy(`cancel-${a.name}`) ? "…" : "Cancel"}</button>
+          : a.status === "Approved" && a.jew_cancel_status === "Pending HR Approval" ? <Chip kind="pend">Cancel Pending</Chip>
+          : a.status === "Approved" ? <button className="btn ghost sm" style={{ width: "auto", padding: "0 12px" }} type="button" disabled={isAnyBusy} onClick={() => requestCancellation(a.name)}>{isBusy(`requestcancel-${a.name}`) ? "…" : "Request cancel"}</button>
+          : <Chip kind={kind}>{a.status}</Chip>}
+      </div>;
+    }) : <div className="empty"><h3>No requests</h3><p>No Late Coming / Early Going requests yet.</p></div>}
+    {wa.waShare && <WhatsAppSheet wa={wa.waShare} flash={flash} heading={wa.waShare.title} onClose={() => wa.setWaShare(null)} />}
+  </>;
+}
+
+function OnDuty({ data, flash, reload }: any) {
+  const DEFAULT_FORM = { from_date: "", to_date: "", explanation: "", from_time: "", to_time: "", od_mode: "full", half_day_date: "", half_day_type: "First Half" };
+  const [form, setForm] = useState(DEFAULT_FORM);
+  const wa = useRequestWhatsApp("on_duty", flash);
+  const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
+  const setFromDate = (v: string) => setForm((f: any) => ({ ...f, from_date: v, to_date: f.to_date && f.to_date < v ? v : f.to_date, half_day_date: f.half_day_date && (f.half_day_date < v || (f.to_date && f.half_day_date > f.to_date)) ? v : f.half_day_date }));
+  const submit = async () => {
+    if (!form.from_date || !form.to_date || !form.explanation) { flash("Required fields", "From date, to date and explanation are required."); return; }
+    if (form.od_mode === "half" && !form.half_day_date) { flash("Half Day date required", "Please pick which date is the Half Day."); return; }
+    if (form.od_mode === "time" && (!form.from_time || !form.to_time)) { flash("Time required", "Please pick From time and To time."); return; }
+    const result = await runAction("submit-on-duty", async () => {
+      const response = await call(API.requestOnDuty, {
+        from_date: form.from_date,
+        to_date: form.to_date,
+        explanation: form.explanation,
+        from_time: form.od_mode === "time" ? fmtTime12(form.from_time) : undefined,
+        to_time: form.od_mode === "time" ? fmtTime12(form.to_time) : undefined,
+        full_day: form.od_mode === "half" ? 0 : 1,
+        half_day_date: form.od_mode === "half" ? form.half_day_date : undefined,
+        half_day_part: form.od_mode === "half" ? form.half_day_type : undefined,
+      });
+      await reload();
+      return response;
+    }, { successTitle: "Request submitted", successMessage: "HR has been notified.", errorTitle: "Request failed" });
+    if (result) { setForm(DEFAULT_FORM); if ((result as any).whatsapp?.text) wa.setWaShare({ ...(result as any).whatsapp, title: "Request submitted" }); }
+  };
+  const requests = data.requests || [];
+  const OD_MODES = [
+    { key: "full", label: "Full Day" },
+    { key: "time", label: "Particular Time" },
+    { key: "half", label: "Half Day" },
+  ];
+  return <>
+    <div className="card">
+      <div className="grid2">
+        <Field label="From date" icon="calendar" type="date" value={form.from_date} onChange={setFromDate} />
+        <Field label="To date" icon="calendar" type="date" value={form.to_date} onChange={(v: string) => setForm((f: any) => ({ ...f, to_date: v }))} />
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 13 }}>
+        {OD_MODES.map((m) => (
+          <button key={m.key} type="button" onClick={() => setForm((f: any) => ({ ...f, od_mode: m.key }))}
+            style={{
+              flex: 1, height: 40, borderRadius: 12, fontSize: 12.5, fontWeight: 600, cursor: "pointer",
+              border: form.od_mode === m.key ? "1px solid var(--iris)" : "1px solid var(--hair2)",
+              background: form.od_mode === m.key ? "var(--iris)" : "var(--surface)",
+              color: form.od_mode === m.key ? "#fff" : "var(--iris)",
+            }}>
+            {m.label}
+          </button>
+        ))}
+      </div>
+      {form.od_mode === "time" && <div className="grid2" style={{ marginTop: 13 }}>
+        <Field label="From time" icon="clock" type="time" value={form.from_time} onChange={(v: string) => setForm({ ...form, from_time: v })} />
+        <Field label="To time" icon="clock" type="time" value={form.to_time} onChange={(v: string) => setForm({ ...form, to_time: v })} />
+      </div>}
+      {form.od_mode === "time" && <div style={{ fontSize: 11, color: "var(--faint)", marginTop: 4 }}>These duty hours count as time worked. Come to the office for the rest of the day and punch IN and OUT: late / early is waived for the duty hours, and the day is Present when office + duty hours complete your shift (otherwise Half Day).</div>}
+      {form.od_mode === "half" && <div style={{ marginTop: 13 }}>
+        <Field label="Half Day date" icon="calendar" type="date" value={form.half_day_date} onChange={(v: string) => setForm({ ...form, half_day_date: v })} />
+        <Select label="Which half are you On Duty?" value={form.half_day_type} onChange={(v: string) => setForm({ ...form, half_day_type: v })} options={["First Half", "Second Half"]} />
+        <div style={{ fontSize: 11, color: "var(--faint)", marginTop: 4 }}>Only this one date (within the range above) is a half day. The other half you work from the office: punch IN and OUT as usual and the day counts as Present (late / early rules are waived for the duty half). Without an office punch it stays a Half Day.</div>
+      </div>}
+      <Field label="Explanation" value={form.explanation} onChange={(v: string) => setForm({ ...form, explanation: v })} placeholder="Where / why (e.g. client site visit)" />
+      <div style={{ marginTop: 16 }}><button className="btn" type="button" disabled={isAnyBusy} onClick={submit}><Ic name="check" /> {isBusy("submit-on-duty") ? "Submitting…" : "Submit request"}</button></div>
+    </div>
+    <div className="sec-lab">My requests</div>
+    {requests.length ? requests.map((r: any) => {
+      const kind = statusChipKind(r.jew_od_status);
+      return <div className="qrow" key={r.name}>
+        <div className="qa"><Ic name={kind === "ok" ? "check" : kind === "err" ? "close" : "briefcase"} /></div>
+        <div className="qt"><strong>On Duty</strong><span>{fmtDMY(r.from_date)}{r.from_date !== r.to_date ? ` \u2013 ${fmtDMY(r.to_date)}` : ""}{r.half_day ? ` \u00b7 Half day${r.custom_half_day_type ? ` (${r.custom_half_day_type} On Duty)` : ""}` : ""}</span></div>
+        {!/cancel|reject/i.test(String(r.jew_od_status)) && <WaButton busy={wa.waBusy === r.name} onClick={() => wa.openWa(r.name)} />}
+        <Chip kind={kind}>{r.jew_od_status}</Chip>
+      </div>;
+    }) : <div className="empty"><h3>No requests</h3><p>No On Duty requests yet.</p></div>}
+    {wa.waShare && <WhatsAppSheet wa={wa.waShare} flash={flash} heading={wa.waShare.title} onClose={() => wa.setWaShare(null)} />}
+  </>;
+}
+
+function OnDutyApproval({ requests, flash, reload }: any) {
+  const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
+  const decide = async (r: any, action: string) => {
+    let remarks = "";
+    if (action === "Rejected") {
+      remarks = window.prompt("Reject reason") || "";
+      if (!remarks.trim()) { flash("Reject Reason required", "Reject Reason required."); return; }
+    }
+    await runAction(`${action}-${r.name}`, async () => { await call(API.decideOnDuty, { name: r.name, action, remarks }); await reload(); }, { successTitle: "Updated", successMessage: "On Duty request updated.", errorTitle: "Update failed" });
+  };
+  return <>
+    {requests.length ? requests.map((r: any) => (
+      <div className="card" style={{ marginBottom: 11 }} key={r.name}>
+        <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
+          <div className="qa" style={{ width: 38, height: 38, borderRadius: 11, background: "var(--iris-tint)", color: "var(--iris)", display: "grid", placeItems: "center" }}><Ic name="briefcase" style={{ width: 17, height: 17 }} /></div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <strong style={{ fontSize: 13 }}>{r.employee_name || r.employee}</strong>
+            <div style={{ fontSize: 11, color: "var(--faint)" }}>{fmtDMY(r.from_date)}{r.from_date !== r.to_date ? ` \u2013 ${fmtDMY(r.to_date)}` : ""} \u00b7 {r.explanation || "-"}</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 9, marginTop: 12, flexWrap: "wrap" }}>
+          <button className="btn ok sm" style={{ flex: 1, minWidth: 88 }} type="button" disabled={isAnyBusy} onClick={() => decide(r, "Approved")}>{isBusy(`Approved-${r.name}`) ? "…" : "Approve"}</button>
+          <button className="btn danger sm" style={{ flex: 1, minWidth: 88 }} type="button" disabled={isAnyBusy} onClick={() => decide(r, "Rejected")}>Reject</button>
+        </div>
+      </div>
+    )) : <div className="empty"><h3>All clear</h3><p>No pending On Duty requests.</p></div>}
+  </>;
+}
+
+const MISSING_PUNCH_STATUS_LABEL: Record<string, string> = {
+  "Missing Mark In": "Check-In Approved",
+  "Missing Mark Out": "Check-Out Approved",
+  "Missing Mark In & Out": "Check-In & Out Approved",
+};
+function regularizationStatusLabel(issueType: string, status: string): string {
+  if (status === "Approved as Present" && MISSING_PUNCH_STATUS_LABEL[issueType]) return MISSING_PUNCH_STATUS_LABEL[issueType];
+  return status;
+}
+
+function RegularizationRequest({ data, flash, reload }: any) {
+  const [form, setForm] = useState({ attendance_date: "", issue_type: "Missing Mark Out", reason: "" });
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
+  const submit = async () => {
+    if (!form.attendance_date || !form.reason) { flash("Required fields", "Date and reason are required."); return; }
+    const result = await runAction("submit-regularization", async () => {
+      const response = await call(API.requestAttendanceRegularization, form);
+      await reload();
+      return response;
+    }, { successTitle: "Request submitted", successMessage: "HR has been notified.", errorTitle: "Request failed" });
+    if (result) setForm({ attendance_date: "", issue_type: "Missing Mark Out", reason: "" });
+  };
+  const requests = data.regularizations || [];
+  return <>
+    <div className="card">
+      <Select label="Regularization type" value={form.issue_type} onChange={(v: string) => setForm({ ...form, issue_type: v })} options={["Missing Mark In", "Missing Mark Out", "Missing Mark In & Out", "Missing Mark In (Half Day)", "Missing Mark Out (Half Day)", "Late Coming Check-in", "Early Going Check-out"]} />
+      <div style={{ marginTop: 13 }}><Field label="Date" icon="calendar" type="date" value={form.attendance_date} onChange={(v: string) => setForm({ ...form, attendance_date: v })} /></div>
+      <Field label="Reason" value={form.reason} onChange={(v: string) => setForm({ ...form, reason: v })} placeholder="Explain the reason for HR" />
+      <div style={{ marginTop: 16 }}><button className="btn" type="button" disabled={isAnyBusy} onClick={submit}><Ic name="check" /> {isBusy("submit-regularization") ? "Submitting…" : "Submit request"}</button></div>
+    </div>
+    <div className="sec-lab">My requests</div>
+    {requests.length ? requests.map((r: any) => {
+      const kind = statusChipKind(r.status);
+      const isOpen = expanded === r.name;
+      return <div key={r.name}>
+        <div className="qrow" role="button" tabIndex={0} style={{ cursor: "pointer" }} onClick={() => setExpanded(isOpen ? null : r.name)}>
+          <div className="qa"><Ic name={kind === "ok" ? "check" : kind === "err" ? "close" : "clock"} /></div>
+          <div className="qt"><strong>{r.issue_type}</strong><span>{fmtDMY(r.attendance_date)}</span></div>
+          <Chip kind={kind}>{regularizationStatusLabel(r.issue_type, r.status)}</Chip>
+        </div>
+        {isOpen && <div className="card" style={{ marginTop: -4, marginBottom: 11, fontSize: 12.5 }}>
+          <div><strong>Date:</strong> {fmtDMY(r.attendance_date)}</div>
+          <div style={{ marginTop: 6 }}><strong>Issue:</strong> {r.issue_type}</div>
+          {r.in_time && <div style={{ marginTop: 6 }}><strong>In time:</strong> {r.in_time}</div>}
+          {r.out_time && <div style={{ marginTop: 6 }}><strong>Out time:</strong> {r.out_time}</div>}
+          <div style={{ marginTop: 6 }}><strong>{r.status === "Pending" ? "Your reason:" : "HR remarks:"}</strong> {r.remarks || "—"}</div>
+        </div>}
+      </div>;
+    }) : <div className="empty"><h3>No requests</h3><p>No attendance regularization requests yet.</p></div>}
   </>;
 }
 
@@ -1108,8 +1843,13 @@ function Admin({ open, caps, data }: any) {
     <div className="sec-lab">Admin modules</div>
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {caps.can_approve_leave && <Mod icon="check" title="Leave approval" sub="Approve or reject requests" onClick={() => open("leaveApproval")} />}
+      {caps.can_approve_late_early && <Mod icon="check" cyan title="Late/Early approval" sub="Approve or reject requests" onClick={() => open("lateEarlyApproval")} />}
+      {caps.can_approve_late_early_hr && <Mod icon="check" cyan title="Late/Early — HR approval" sub="Final sign-off after Dept Head" onClick={() => open("lateEarlyApprovalHr")} />}
+      {caps.can_decide_cancellations && <Mod icon="close" title="Cancellations" sub="Approve/reject cancellation requests" onClick={() => open("cancellationApproval")} />}
       {caps.can_view_admin && <Mod icon="users" cyan title="Employees" sub="Face / location status" onClick={() => open("employees")} />}
+      {caps.can_view_approvers && <Mod icon="check" title="Approvers" sub="MD, HR & Department Heads" onClick={() => open("approvers")} />}
       {caps.can_register_face && <Mod icon="camera" title="Face register" sub="Enroll employee templates" onClick={() => open("face")} />}
+      {caps.can_approve_face && <Mod icon="check" cyan title="Face approvals" sub="Approve employees' face photos" onClick={() => open("faceApproval")} />}
       {caps.can_manage_locations && <Mod icon="pin" cyan title="Locations / geofence" sub="Assign work sites" onClick={() => open("location")} />}
       {caps.can_manage_leave_policy && <Mod icon="leaf" title="Leave policy" sub="Configure leave types" onClick={() => open("leavePolicy")} />}
       {caps.can_manage_shift_policy && <Mod icon="clock" cyan title="Shift policy" sub="Late / early / short rules" onClick={() => open("shiftPolicy")} />}
@@ -1121,28 +1861,78 @@ function Admin({ open, caps, data }: any) {
 function FaceAdmin({ employees, flash, selectedEmployee, onCameraActiveChange }: any) {
   const [employee, setEmployee] = useState(selectedEmployee || "");
   const [image, setImage] = useState("");
+  const [live, setLive] = useState<{ token: string; frames: string[] } | null>(null);
   const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
   useEffect(() => { if (selectedEmployee) setEmployee(selectedEmployee); }, [selectedEmployee]);
   const selected = (employees || []).find((item: any) => item.name === employee);
   const save = async () => {
     if (!employee || !image) { flash("Required fields", "Select employee and capture face before saving."); return; }
-    await runAction("save-face", async () => { await call(API.registerEmployeeFace, { employee, face_image: image }); setImage(""); }, { successTitle: "Face registered", successMessage: "Server template saved for employee.", errorTitle: "Face failed" });
+    await runAction("save-face", async () => { await call(API.registerEmployeeFace, { employee, face_image: image, ...(live ? { liveness_challenge: live.token, liveness_frames: live.frames } : {}) }); setImage(""); setLive(null); }, { successTitle: "Face registered", successMessage: "Server template saved for employee.", errorTitle: "Face failed" });
   };
   return <>
-    <Select label="Select employee" icon="user" value={employee} onChange={(value: string) => { setEmployee(value); setImage(""); window.dispatchEvent(new Event("jew-hrms-stop-camera")); }} options={(employees || []).map((e: any) => ({ value: e.name, label: e.label || e.employee_name || e.name, description: e.description || e.name }))} />
+    <Select label="Select employee" icon="user" value={employee} onChange={(value: string) => { setEmployee(value); setImage(""); setLive(null); window.dispatchEvent(new Event("jew-hrms-stop-camera")); }} options={(employees || []).map((e: any) => ({ value: e.name, label: e.label || e.employee_name || e.name, description: e.description || e.name }))} />
     {selected && <div className="qrow" style={{ marginTop: 12 }}><div className="qa"><Ic name="user" /></div><div className="qt"><strong>{selected.employee_name || selected.name}</strong><span>{selected.name} · {selected.face_registered ? "Registered" : "Not registered"}</span></div></div>}
-    <div className="mt"><LiveCamera image={image} onCapture={setImage} flash={flash} disabled={!employee} disabledMessage="Please select employee first." onActiveChange={onCameraActiveChange} /></div>
+    <div className="mt"><LiveCamera image={image} onCapture={(value: string) => { setImage(value); if (!value) setLive(null); }} flash={flash} disabled={!employee} disabledMessage="Please select employee first." onActiveChange={onCameraActiveChange} liveEmployee={employee} onLive={setLive} /></div>
     <button className="btn mt" type="button" disabled={isAnyBusy || !employee || !image} onClick={save}><Ic name="check" /> {isBusy("save-face") ? "Saving…" : "Save face template"}</button>
     {!(employees || []).length && <div className="empty"><h3>No employees loaded</h3><p>Open this screen from Admin after the employee list loads.</p></div>}
   </>;
 }
 
-function LiveCamera({ image, onCapture, flash, disabled = false, disabledMessage = "Please select employee first.", onActiveChange }: any) {
+// The server puts window.JEW_LIVENESS_ACTIVE = true into the page ONLY for a site whose site_config has
+// jew_hrms_liveness_mode = "active". Every other site (e.g. the live jewipl HRMS) never sees any of the
+// live-scan code paths and behaves exactly like the app did before the live scan existed.
+const isLiveScanSite = (): boolean => typeof window !== "undefined" && (window as any).JEW_LIVENESS_ACTIVE === true;
+
+const REG_LIVE_PROMPTS: Record<string, string> = {
+  turn_left: "Turn your head to your LEFT",
+  turn_right: "Turn your head to your RIGHT",
+  blink: "Blink your eyes now",
+};
+const regSleepMs = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+const regGrabFrame = (video: HTMLVideoElement, maxSide: number, quality: number): string | null => {
+  if (!video.videoWidth || !video.videoHeight) return null;
+  const scale = Math.min(1, maxSide / Math.max(video.videoWidth, video.videoHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(video.videoWidth * scale); canvas.height = Math.round(video.videoHeight * scale);
+  canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", quality);
+};
+
+const liveFilmScan = async (getVideo: () => HTMLVideoElement | null, steps: string[], setText: (text: string) => void, matchSide: number): Promise<string[]> => {
+  // Longer windows so a normal person can react (2.8s per action), a visible countdown, and DENSE sampling
+  // (~80ms) only while a blink is asked - a blink is over in ~150ms and falls between sparse frames. Turns,
+  // the straight-ahead start/end need far fewer frames (250ms), which keeps the upload and the server work small.
+  const frames: string[] = [];
+  const phase = async (label: string, ms: number, gapMs: number, side: number, quality: number) => {
+    const end = Date.now() + ms;
+    let shown = "";
+    while (Date.now() < end) {
+      const video = getVideo();
+      if (!video) throw new Error("Camera stopped. Please try again.");
+      const started = Date.now();
+      const frame = regGrabFrame(video, side, quality);
+      if (frame && frames.length < 85) frames.push(frame);
+      const text = label + " (" + Math.max(1, Math.ceil((end - Date.now()) / 1000)) + ")";
+      if (text !== shown) { setText(text); shown = text; }
+      await regSleepMs(Math.max(5, gapMs - (Date.now() - started)));
+    }
+  };
+  await phase("Look straight at the camera", 1000, 250, matchSide, 0.8);
+  for (const step of steps) {
+    const blink = step === "blink";
+    await phase(REG_LIVE_PROMPTS[step] || "Follow the instruction", 2400, blink ? 80 : 250, 320, blink ? 0.6 : 0.65);
+  }
+  await phase("Look straight again", 1000, 250, 320, 0.65);
+  return frames;
+};
+
+function LiveCamera({ image, onCapture, flash, disabled = false, disabledMessage = "Please select employee first.", onActiveChange, liveEmployee, onLive }: any) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [active, setActive] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [scanning, setScanning] = useState(false);
   const [statusText, setStatusText] = useState("Camera ready");
   const setCameraActive = (value: boolean) => { setActive(value); onActiveChange?.(value); };
   const stop = () => {
@@ -1161,7 +1951,7 @@ function LiveCamera({ image, onCapture, flash, disabled = false, disabledMessage
     if (!navigator.mediaDevices?.getUserMedia) { flash("Camera failed", "Camera is not available on this device."); return; }
     setStarting(true); setStatusText("Starting camera…");
     try {
-      const stream = await openCamera();
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 720 }, height: { ideal: 720 } }, audio: false });
       streamRef.current = stream; setCameraActive(true);
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       const video = videoRef.current;
@@ -1176,9 +1966,30 @@ function LiveCamera({ image, onCapture, flash, disabled = false, disabledMessage
       flash("Camera failed", name === "NotAllowedError" || name === "PermissionDeniedError" ? "Camera permission denied. Please allow camera access." : "Camera is not available on this device.");
     } finally { setStarting(false); }
   };
-  const capture = () => {
+  const capture = async () => {
     const video = videoRef.current; const canvas = canvasRef.current;
     if (!video || !canvas || !streamRef.current || video.videoWidth === 0) { flash("Camera", disabled ? disabledMessage : "Start camera before capturing face."); return; }
+    // ACTIVE live scan when the server requires it for face registration on this site. Any failure to ask
+    // (or "enabled: false") keeps the normal single-photo capture below, so other sites are unaffected.
+    if (liveEmployee && isLiveScanSite()) {
+      let challenge: any = null;
+      try { challenge = await call(API.livenessStart, { employee: liveEmployee }); } catch { challenge = null; }
+      if (challenge?.enabled) {
+        if (challenge.locked) { flash("Live scan", challenge.message || "Too many failed attempts. Please try again later."); return; }
+        setScanning(true);
+        try {
+          const frames = await liveFilmScan(() => (streamRef.current ? videoRef.current : null), challenge.steps || [], setStatusText, 640);
+          onLive?.({ token: challenge.token, frames });
+          onCapture(frames[0]);
+          setStatusText("Live scan captured. Save or retake."); stop();
+        } catch (error: any) {
+          flash("Live scan", error?.message || "Live scan failed. Please try again.");
+          setStatusText("Keep your face inside the frame");
+        } finally { setScanning(false); }
+        return;
+      }
+    }
+    onLive?.(null);
     canvas.width = video.videoWidth; canvas.height = video.videoHeight;
     canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
     onCapture(canvas.toDataURL("image/jpeg", 0.9));
@@ -1194,14 +2005,14 @@ function LiveCamera({ image, onCapture, flash, disabled = false, disabledMessage
       </div>
       <div style={{ marginTop: 14, display: "flex", gap: 9 }}>
         <button className="btn ghost" type="button" disabled={starting || disabled} onClick={active ? stop : start}><Ic name="camera" /> {active ? "Stop" : starting ? "…" : "Start"}</button>
-        <button className="btn" type="button" disabled={!active || starting} onClick={capture}><Ic name="check" /> Capture</button>
+        <button className="btn" type="button" disabled={!active || starting || scanning} onClick={capture}><Ic name="check" /> {scanning ? "Scanning…" : "Capture"}</button>
       </div>
       {image && <button className="btn ghost mt" type="button" onClick={() => { onCapture(""); if (!disabled) start(); }}>Retake</button>}
     </div>
   );
 }
 
-function LocationAdmin({ data, flash, reload }: any) {
+function LocationAdmin({ data, flash, reload, caps }: any) {
   const [form, setForm] = useState({ location_name: "", latitude: 21.1458, longitude: 79.0882, default_radius_meter: 100 });
   const [mapCenter, setMapCenter] = useState<[number, number]>([21.1458, 79.0882]);
   const [employee, setEmployee] = useState("");
@@ -1247,7 +2058,7 @@ function LocationAdmin({ data, flash, reload }: any) {
     await runAction(`remove-assignment-${assignment}`, async () => { await call(API.removeEmployeeLocation, { assignment }); if (employee) { const res = await call(API.getEmployeeLocations, { employee }); setEmployeeLocations(res.locations || []); } await reload(); }, { successTitle: "Assignment removed", successMessage: "Employee location assignment removed.", errorTitle: "Remove failed" });
   };
   return <>
-    <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+    {caps?.can_manage_masters && <div className="card" style={{ padding: 0, overflow: "hidden" }}>
       <div className="map-box"><MapContainer center={mapCenter} zoom={13} scrollWheelZoom={false}><MapRecenter center={mapCenter} /><TileLayer attribution="OpenStreetMap" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" /><PickLocation onPick={(lat, lng) => { setForm({ ...form, latitude: lat, longitude: lng }); setMapCenter([lat, lng]); }} /><Marker position={[form.latitude, form.longitude]} /><Circle center={[form.latitude, form.longitude]} radius={form.default_radius_meter} /></MapContainer></div>
       <div style={{ padding: 15 }}>
         <Field label="Location name" value={form.location_name} onChange={(v: string) => setForm({ ...form, location_name: v })} />
@@ -1259,7 +2070,7 @@ function LocationAdmin({ data, flash, reload }: any) {
         <button className="btn ghost mt" type="button" disabled={isAnyBusy} onClick={useCurrentLocation}><Ic name="pin" /> {isBusy("use-current-location") ? "Capturing…" : "Use current location"}</button>
         <button className="btn mt" type="button" disabled={isAnyBusy || !form.location_name} onClick={save}><Ic name="check" /> {isBusy("save-location") ? "Saving…" : "Save location"}</button>
       </div>
-    </div>
+    </div>}
     <div className="card mt">
       <Select label="Employee" value={employee} onChange={loadEmployeeLocations} options={employeeOptions} />
       <Select label="Location" value={location} onChange={setLocation} options={locationOptions} />
@@ -1268,7 +2079,7 @@ function LocationAdmin({ data, flash, reload }: any) {
     <div className="sec-lab">Saved locations</div>
     <div className="list card" style={{ padding: "4px 15px" }}>
       {(data.locations || []).length ? data.locations.map((item: any) => (
-        <div className="row" key={item.name}><div className="prow" style={{ border: 0, padding: 0, flex: 1 }}><div className="pi"><Ic name="building" /></div><div className="pt"><strong>{item.location_name || item.name}</strong><span>{item.latitude}, {item.longitude} · {item.default_radius_meter} m</span></div></div><button className="btn danger sm" style={{ width: "auto", padding: "0 12px" }} type="button" disabled={isAnyBusy} onClick={() => deleteLocation(item.name)}>{isBusy(`delete-location-${item.name}`) ? "…" : "Delete"}</button></div>
+        <div className="row" key={item.name}><div className="prow" style={{ border: 0, padding: 0, flex: 1 }}><div className="pi"><Ic name="building" /></div><div className="pt"><strong>{item.location_name || item.name}</strong><span>{item.latitude}, {item.longitude} · {item.default_radius_meter} m</span></div></div>{caps?.can_manage_masters && <button className="btn danger sm" style={{ width: "auto", padding: "0 12px" }} type="button" disabled={isAnyBusy} onClick={() => deleteLocation(item.name)}>{isBusy(`delete-location-${item.name}`) ? "…" : "Delete"}</button>}</div>
       )) : <div className="empty"><h3>No locations</h3><p>No saved locations yet.</p></div>}
     </div>
     <div className="sec-lab">Employee assignments</div>
@@ -1333,23 +2144,51 @@ function ShiftPolicy({ policies, flash, reload }: any) {
   </>;
 }
 
+// Missing Mark In/Out (self-service) issue types: HR just accepts or rejects the
+// employee's claim - the actual Check-In/Check-Out punch is auto-filled server
+// side from the employee's own shift start/end time, no manual time entry needed.
+// Each maps to exactly one button label + the resulting regularization action.
+const MISSING_PUNCH_APPROVE_ACTION: Record<string, { label: string; action: string }> = {
+  "Missing Mark In": { label: "Approve Check-In", action: "Checked In" },
+  "Missing Mark Out": { label: "Approve Check-Out", action: "Approved as Check-Out" },
+  "Missing Mark In & Out": { label: "Approve Check-In & Out", action: "Approved as Present" },
+  "Missing Mark In (Half Day)": { label: "Approve Check-In (Half Day)", action: "Marked Half Day" },
+  "Missing Mark Out (Half Day)": { label: "Approve Check-Out (Half Day)", action: "Marked Half Day" },
+  "Late Coming Check-in": { label: "Approve Late Coming", action: "Marked Late Coming" },
+  "Early Going Check-out": { label: "Approve Early Going", action: "Marked Early Going" },
+};
+
 function Regularization({ items, flash, reload }: any) {
   const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
-  const decide = async (name: string, action: string) => {
-    const remarks = action === "Rejected" ? window.prompt("Reject reason") || "" : window.prompt("Remarks") || "";
+  const decide = async (r: any, action: string) => {
+    const name = r.name;
+    // Approve is a single click, no remarks needed - only Reject asks for a reason.
+    let remarks = "";
+    if (action === "Rejected") {
+      remarks = window.prompt("Reject reason") || "";
+      if (!remarks.trim()) { flash("Reject Reason required", "Reject Reason required."); return; }
+    }
     await runAction(`${action}-${name}`, async () => { await call(API.decideRegularization, { name, action, remarks }); await reload(); }, { successTitle: "Updated", successMessage: "Regularization updated.", errorTitle: "Update failed" });
   };
   return <>
-    {items.length ? items.map((r: any) => (
-      <div className="card" style={{ marginBottom: 11 }} key={r.name}>
-        <div style={{ display: "flex", alignItems: "center", gap: 11 }}><div className="qa" style={{ width: 38, height: 38, borderRadius: 11, background: "var(--iris-tint)", color: "var(--iris)", display: "grid", placeItems: "center" }}><Ic name="refresh" style={{ width: 17, height: 17 }} /></div><div style={{ flex: 1, minWidth: 0 }}><strong style={{ fontSize: 13 }}>{r.employee}</strong><div style={{ fontSize: 11, color: "var(--faint)" }}>{fmtDMY(r.attendance_date)} · {r.issue_type} · {r.policy_action || "Review"}</div></div></div>
-        <div style={{ display: "flex", gap: 9, marginTop: 12 }}>
-          <button className="btn ok sm" style={{ flex: 1 }} type="button" disabled={isAnyBusy} onClick={() => decide(r.name, "Approved as Present")}>{isBusy(`Approved as Present-${r.name}`) ? "…" : "Present"}</button>
-          <button className="btn ghost sm" style={{ flex: 1 }} type="button" disabled={isAnyBusy} onClick={() => decide(r.name, "Marked Half Day")}>Half day</button>
-          <button className="btn danger sm" style={{ flex: 1 }} type="button" disabled={isAnyBusy} onClick={() => decide(r.name, "Rejected")}>Reject</button>
+    {items.length ? items.map((r: any) => {
+      const missingPunch = MISSING_PUNCH_APPROVE_ACTION[r.issue_type];
+      return <div className="card" style={{ marginBottom: 11 }} key={r.name}>
+        <div style={{ display: "flex", alignItems: "center", gap: 11 }}><div className="qa" style={{ width: 38, height: 38, borderRadius: 11, background: "var(--iris-tint)", color: "var(--iris)", display: "grid", placeItems: "center" }}><Ic name="refresh" style={{ width: 17, height: 17 }} /></div><div style={{ flex: 1, minWidth: 0 }}><strong style={{ fontSize: 13 }}>{r.employee_name || r.employee}</strong><div style={{ fontSize: 11, color: "var(--faint)" }}>{fmtDMY(r.attendance_date)} · {r.issue_type} · {r.policy_action || "Review"}</div></div></div>
+        <div style={{ display: "flex", gap: 9, marginTop: 12, flexWrap: "wrap" }}>
+          {missingPunch ? <>
+            <button className="btn ok sm" style={{ flex: 1, minWidth: 88 }} type="button" disabled={isAnyBusy} onClick={() => decide(r, missingPunch.action)}>{isBusy(`${missingPunch.action}-${r.name}`) ? "…" : missingPunch.label}</button>
+            <button className="btn danger sm" style={{ flex: 1, minWidth: 88 }} type="button" disabled={isAnyBusy} onClick={() => decide(r, "Rejected")}>Reject</button>
+          </> : <>
+            <button className="btn ok sm" style={{ flex: 1, minWidth: 88 }} type="button" disabled={isAnyBusy} onClick={() => decide(r, "Approved as Present")}>{isBusy(`Approved as Present-${r.name}`) ? "…" : "Present"}</button>
+            <button className="btn ghost sm" style={{ flex: 1, minWidth: 88 }} type="button" disabled={isAnyBusy} onClick={() => decide(r, "Marked Half Day")}>Half day</button>
+            <button className="btn ghost sm" style={{ flex: 1, minWidth: 88 }} type="button" disabled={isAnyBusy} onClick={() => decide(r, "Marked Late Coming")}>Late coming</button>
+            <button className="btn ghost sm" style={{ flex: 1, minWidth: 88 }} type="button" disabled={isAnyBusy} onClick={() => decide(r, "Marked Early Going")}>Early going</button>
+            <button className="btn danger sm" style={{ flex: 1, minWidth: 88 }} type="button" disabled={isAnyBusy} onClick={() => decide(r, "Rejected")}>Reject</button>
+          </>}
         </div>
-      </div>
-    )) : <div className="empty"><h3>All clear</h3><p>No pending regularization.</p></div>}
+      </div>;
+    }) : <div className="empty"><h3>All clear</h3><p>No pending regularization.</p></div>}
   </>;
 }
 
@@ -1370,12 +2209,95 @@ function LeaveApproval({ leaves, flash, reload }: any) {
           <div style={{ flex: 1, minWidth: 0 }}><strong style={{ fontSize: 13 }}>{nm}</strong><div style={{ fontSize: 11, color: "var(--faint)" }}>{l.leave_type} · <span className="num cy">{fmtDMY(l.from_date)} → {fmtDMY(l.to_date)}</span>{l.half_day ? " · Half day" : ""}</div></div>
           <Chip kind="pend">{st}</Chip>
         </div>
+        {(l.recent_leave_count !== undefined && l.recent_leave_count !== null) && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>Leave taken in last 15 days: <b>{l.recent_leave_count} day(s)</b></div>}
         <div style={{ display: "flex", gap: 9, marginTop: 12 }}>
-          <button className="btn ok sm" style={{ flex: 1 }} type="button" disabled={isAnyBusy} onClick={() => decide(l.name, true)}><Ic name="check" /> {isBusy(`approve-${l.name}`) ? "…" : (st === "Pending HR Approval" || st === "Pending Admin Approval") ? "Final approve" : "Approve"}</button>
+          <button className="btn ok sm" style={{ flex: 1 }} type="button" disabled={isAnyBusy} onClick={() => decide(l.name, true)}><Ic name="check" /> {isBusy(`approve-${l.name}`) ? "…" : st === "Pending Admin Approval" ? "Final approve" : "Approve"}</button>
           <button className="btn danger sm" style={{ flex: 1 }} type="button" disabled={isAnyBusy} onClick={() => decide(l.name, false)}><Ic name="close" /> {isBusy(`reject-${l.name}`) ? "…" : "Reject"}</button>
         </div>
       </div>;
     }) : <div className="empty"><h3>All clear</h3><p>No pending leave requests.</p></div>}
+  </>;
+}
+
+function LateEarlyApproval({ items, flash, reload }: any) {
+  const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
+  const decide = async (name: string, approve: boolean) => {
+    const remarks = approve ? "" : window.prompt("Rejection remarks") || "";
+    if (!approve && !remarks.trim()) { flash("Reject Reason required", "Reject Reason required."); return; }
+    await runAction(`${approve ? "approve" : "reject"}-${name}`, async () => { await call(API.decideLateEarly, { name, decision: approve ? "Approved" : "Rejected", remarks }); reload(); }, { successTitle: approve ? "Approved" : "Rejected", successMessage: "Application updated.", errorTitle: approve ? "Approve failed" : "Reject failed" });
+  };
+  return <>
+    {items.length ? items.map((a: any) => {
+      const nm = a.employee_name || a.employee;
+      return <div className="card" style={{ marginBottom: 11 }} key={a.name}>
+        <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
+          <div className="qa" style={{ width: 38, height: 38, borderRadius: 11, background: "var(--iris-tint)", color: "var(--iris)", display: "grid", placeItems: "center", fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: 13 }}>{empInitials(nm)}</div>
+          <div style={{ flex: 1, minWidth: 0 }}><strong style={{ fontSize: 13 }}>{nm}</strong><div style={{ fontSize: 11, color: "var(--faint)" }}>{a.application_type} · <span className="num cy">{fmtDMY(a.application_date)}</span> · {a.expected_time}</div>{a.reason && <div style={{ fontSize: 11, color: "var(--faint)", marginTop: 3 }}>{a.reason}</div>}</div>
+          <Chip kind="pend">{a.status || "Pending"}</Chip>
+        </div>
+        <div style={{ display: "flex", gap: 9, marginTop: 12 }}>
+          <button className="btn ok sm" style={{ flex: 1 }} type="button" disabled={isAnyBusy} onClick={() => decide(a.name, true)}><Ic name="check" /> {isBusy(`approve-${a.name}`) ? "…" : "Approve"}</button>
+          <button className="btn danger sm" style={{ flex: 1 }} type="button" disabled={isAnyBusy} onClick={() => decide(a.name, false)}><Ic name="close" /> {isBusy(`reject-${a.name}`) ? "…" : "Reject"}</button>
+        </div>
+      </div>;
+    }) : <div className="empty"><h3>All clear</h3><p>No pending Late Coming / Early Going requests.</p></div>}
+  </>;
+}
+
+function CancellationApproval({ leaves, lateEarly, flash, reload }: any) {
+  const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
+  const decideLeave = async (name: string, approve: boolean) => {
+    const remarks = approve ? (window.prompt("Remarks (optional)") || "") : (window.prompt("Rejection remarks") || "");
+    if (!approve && !remarks.trim()) { flash("Reject Reason required", "Reject Reason required."); return; }
+    await runAction(`leavecancel-${approve ? "approve" : "reject"}-${name}`, async () => { await call(API.decideLeaveCancellation, { name, action: approve ? "approve" : "reject", remarks }); reload(); }, { successTitle: approve ? "Approved" : "Rejected", successMessage: "Cancellation updated.", errorTitle: approve ? "Approve failed" : "Reject failed" });
+  };
+  const decideLateEarly = async (name: string, approve: boolean) => {
+    const remarks = approve ? (window.prompt("Remarks (optional)") || "") : (window.prompt("Rejection remarks") || "");
+    if (!approve && !remarks.trim()) { flash("Reject Reason required", "Reject Reason required."); return; }
+    await runAction(`lecancel-${approve ? "approve" : "reject"}-${name}`, async () => { await call(API.decideLateEarlyCancellation, { name, action: approve ? "approve" : "reject", remarks }); reload(); }, { successTitle: approve ? "Approved" : "Rejected", successMessage: "Cancellation updated.", errorTitle: approve ? "Approve failed" : "Reject failed" });
+  };
+  const empty = !leaves.length && !lateEarly.length;
+  return <>
+    {leaves.length > 0 && <div className="sec-lab">Leave cancellation requests</div>}
+    {leaves.map((l: any) => {
+      const nm = l.employee_name || l.employee;
+      return <div className="card" style={{ marginBottom: 11 }} key={l.name}>
+        <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
+          <div className="qa" style={{ width: 38, height: 38, borderRadius: 11, background: "var(--iris-tint)", color: "var(--iris)", display: "grid", placeItems: "center", fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: 13 }}>{empInitials(nm)}</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <strong style={{ fontSize: 13 }}>{nm}</strong>
+            <div style={{ fontSize: 11, color: "var(--faint)" }}>{l.leave_type} · original {fmtDMY(l.from_date)} → {fmtDMY(l.to_date)}</div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>Cancel: <span className="num cy">{fmtDMY(l.jew_cancel_from_date)} → {fmtDMY(l.jew_cancel_to_date)}</span> ({l.jew_cancel_days} day{Number(l.jew_cancel_days) === 1 ? "" : "s"})</div>
+            {l.jew_cancel_reason && <div style={{ fontSize: 11, color: "var(--faint)", marginTop: 3 }}>{l.jew_cancel_reason}</div>}
+          </div>
+          <Chip kind="pend">Leave</Chip>
+        </div>
+        <div style={{ display: "flex", gap: 9, marginTop: 12 }}>
+          <button className="btn ok sm" style={{ flex: 1 }} type="button" disabled={isAnyBusy} onClick={() => decideLeave(l.name, true)}><Ic name="check" /> {isBusy(`leavecancel-approve-${l.name}`) ? "…" : "Approve"}</button>
+          <button className="btn danger sm" style={{ flex: 1 }} type="button" disabled={isAnyBusy} onClick={() => decideLeave(l.name, false)}><Ic name="close" /> {isBusy(`leavecancel-reject-${l.name}`) ? "…" : "Reject"}</button>
+        </div>
+      </div>;
+    })}
+    {lateEarly.length > 0 && <div className="sec-lab">Late / Early cancellation requests</div>}
+    {lateEarly.map((a: any) => {
+      const nm = a.employee_name || a.employee;
+      return <div className="card" style={{ marginBottom: 11 }} key={a.name}>
+        <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
+          <div className="qa" style={{ width: 38, height: 38, borderRadius: 11, background: "var(--iris-tint)", color: "var(--iris)", display: "grid", placeItems: "center", fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: 13 }}>{empInitials(nm)}</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <strong style={{ fontSize: 13 }}>{nm}</strong>
+            <div style={{ fontSize: 11, color: "var(--faint)" }}>{a.application_type} · <span className="num cy">{fmtDMY(a.application_date)}</span></div>
+            {a.jew_cancel_reason && <div style={{ fontSize: 11, color: "var(--faint)", marginTop: 3 }}>{a.jew_cancel_reason}</div>}
+          </div>
+          <Chip kind="pend">Late/Early</Chip>
+        </div>
+        <div style={{ display: "flex", gap: 9, marginTop: 12 }}>
+          <button className="btn ok sm" style={{ flex: 1 }} type="button" disabled={isAnyBusy} onClick={() => decideLateEarly(a.name, true)}><Ic name="check" /> {isBusy(`lecancel-approve-${a.name}`) ? "…" : "Approve"}</button>
+          <button className="btn danger sm" style={{ flex: 1 }} type="button" disabled={isAnyBusy} onClick={() => decideLateEarly(a.name, false)}><Ic name="close" /> {isBusy(`lecancel-reject-${a.name}`) ? "…" : "Reject"}</button>
+        </div>
+      </div>;
+    })}
+    {empty && <div className="empty"><h3>All clear</h3><p>No pending cancellation requests.</p></div>}
   </>;
 }
 
@@ -1398,6 +2320,49 @@ function Employees({ employees, open, selectEmployee }: any) {
   </>;
 }
 
+function Approvers({ data }: any) {
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const md = data.md || [];
+  const hr = data.hr || [];
+  const deptHeads = data.dept_heads || [];
+
+  const personRow = (p: any, key: string) => (
+    <div className="row" key={key}>
+      <div className="qa" style={{ width: 36, height: 36, borderRadius: 11, background: "var(--iris-tint)", color: "var(--iris)", display: "grid", placeItems: "center", fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: 12 }}>{empInitials(p.name)}</div>
+      <div className="mid"><strong>{p.name}</strong><span>{p.email}</span></div>
+    </div>
+  );
+
+  return <>
+    <div className="sec-lab">MD <span className="num" style={{ color: "var(--faint)" }}>{md.length}</span></div>
+    <div className="list card" style={{ padding: "4px 15px", marginBottom: 14 }}>
+      {md.length ? md.map((p: any) => personRow(p, `md-${p.user}`)) : <div className="empty"><h3>None configured</h3><p>No one holds the MD (JEW HRMS Owner) role.</p></div>}
+    </div>
+
+    <div className="sec-lab">HR <span className="num" style={{ color: "var(--faint)" }}>{hr.length}</span></div>
+    <div className="list card" style={{ padding: "4px 15px", marginBottom: 14 }}>
+      {hr.length ? hr.map((p: any) => personRow(p, `hr-${p.user}`)) : <div className="empty"><h3>None configured</h3><p>No one holds the HR (JEW HRMS HR) role.</p></div>}
+    </div>
+
+    <div className="sec-lab">Department Heads <span className="num" style={{ color: "var(--faint)" }}>{deptHeads.length}</span></div>
+    {deptHeads.length ? deptHeads.map((d: any) => {
+      const isOpen = expanded === d.email;
+      return <div key={d.email} style={{ marginBottom: 11 }}>
+        <div className="card" style={{ cursor: "pointer" }} onClick={() => setExpanded(isOpen ? null : d.email)}>
+          <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
+            <div className="qa" style={{ width: 36, height: 36, borderRadius: 11, background: "var(--iris-tint)", color: "var(--iris)", display: "grid", placeItems: "center", fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: 12 }}>{empInitials(d.name)}</div>
+            <div style={{ flex: 1, minWidth: 0 }}><strong style={{ fontSize: 13 }}>{d.name}</strong><div style={{ fontSize: 11, color: "var(--faint)" }}>{d.email}</div></div>
+            <Chip kind="pend">{d.team_count} {d.team_count === 1 ? "employee" : "employees"}</Chip>
+          </div>
+          {isOpen && <div className="rows" style={{ marginTop: 12, borderTop: "1px solid var(--line)", paddingTop: 8 }}>
+            {d.team.map((t: any) => <div key={t.employee} style={{ fontSize: 12.5, padding: "5px 0" }}>{t.employee_name}</div>)}
+          </div>}
+        </div>
+      </div>;
+    }) : <div className="empty"><h3>None configured</h3><p>No employee has a Department Head assigned.</p></div>}
+  </>;
+}
+
 function Notifications({ items }: any) {
   return <>
     {items.length ? items.map((n: any, i: number) => (
@@ -1406,7 +2371,7 @@ function Notifications({ items }: any) {
   </>;
 }
 
-function Profile({ profile, open, onLogout }: any) {
+function Profile({ profile, open, onLogout, caps }: any) {
   const [loggingOut, setLoggingOut] = useState(false);
   const doLogout = async () => { setLoggingOut(true); try { await onLogout(); } finally { setLoggingOut(false); } };
   const name = profile?.employee_name || "Employee";
@@ -1422,12 +2387,68 @@ function Profile({ profile, open, onLogout }: any) {
       <div className="prow"><div className="pi"><Ic name="building" /></div><div className="pt"><strong>Department</strong><span>{profile?.department || "—"}</span></div></div>
       <div className="prow"><div className="pi"><Ic name="clock" /></div><div className="pt"><strong>Shift</strong></div><span className="pv">{profile?.default_shift || "General"}</span></div>
       <div className="prow"><div className="pi"><Ic name="user" /></div><div className="pt"><strong>Status</strong></div><span className="pv">{profile?.status || "Active"}</span></div>
-      <div className="prow"><div className="pi"><Ic name="camera" /></div><div className="pt"><strong>Face</strong></div><span className="pv">{profile?.face_status?.registered ? "Ready" : "Pending"}</span></div>
+      <div className="prow"><div className="pi"><Ic name="camera" /></div><div className="pt"><strong>Face</strong></div><span className="pv">{profile?.face_status?.pending ? "Waiting for approval" : profile?.face_status?.registered ? "Ready" : "Pending"}</span></div>
       <div className="prow"><div className="pi"><Ic name="mail" /></div><div className="pt"><strong>User</strong><span>{profile?.user_id || "—"}</span></div></div>
     </div>
     <button className="btn ghost mt" type="button" onClick={() => open("settings")}><Ic name="gear" /> Settings</button>
     <button className="btn danger mt" type="button" disabled={loggingOut} onClick={doLogout}><Ic name="logout" /> {loggingOut ? "Logging out…" : "Log out"}</button>
   </>;
+}
+
+function SelfFace({ flash, me, onCameraActiveChange }: any) {
+  const [image, setImage] = useState("");
+  const [live, setLive] = useState<{ token: string; frames: string[] } | null>(null);
+  const [fs, setFs] = useState<any>(null);
+  const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
+  const empId = me?.employee || me?.name || "";
+  const loadStatus = async () => { try { setFs(await call(API.getFaceStatus, {})); } catch { /* status stays unknown */ } };
+  useEffect(() => { void loadStatus(); }, []);
+  const submit = async () => {
+    if (!image) { flash("Capture first", "Take your face photo before sending it for approval."); return; }
+    const res: any = await runAction("self-face", async () => call(API.registerMyFace, { face_image: image, ...(live ? { liveness_challenge: live.token, liveness_frames: live.frames } : {}) }), { successTitle: "Sent for approval", errorTitle: "Could not send" });
+    if (res) { setImage(""); setLive(null); void loadStatus(); }
+  };
+  const pending = Boolean(fs?.pending);
+  return <>
+    <div className="card" style={{ marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <strong>My face</strong>
+        <Chip kind={fs?.registered ? "ok" : "pend"} icon="camera">{fs?.registered ? "Active face registered" : "No active face yet"}</Chip>
+        {pending && <Chip kind="pend" icon="clock">Waiting for approval</Chip>}
+      </div>
+      <p className="sub" style={{ marginTop: 10, fontSize: 12.5 }}>
+        {pending ? "Your last photo is with your approver. You can send a new one - it replaces the pending request." : "Take a clear photo of your own face. Your approver checks it, and you can use it for attendance once approved."}
+        {fs?.registered && !pending ? " Your current face keeps working until the new one is approved." : ""}
+      </p>
+      {fs?.rejected && <div className="warn" style={{ marginTop: 8, fontSize: 12.5 }}>Your last photo was rejected{fs.rejected_remarks ? `: ${fs.rejected_remarks}` : "."} Please register again.</div>}
+    </div>
+    <LiveCamera image={image} onCapture={(value: string) => { setImage(value); if (!value) setLive(null); }} flash={flash} onActiveChange={onCameraActiveChange} liveEmployee={empId} onLive={setLive} />
+    <button className="btn mt" type="button" disabled={isAnyBusy || !image} onClick={submit}><Ic name="check" /> {isBusy("self-face") ? "Sending…" : "Send for approval"}</button>
+  </>;
+}
+
+function FaceApproval({ requests, flash, reload }: any) {
+  const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
+  const decide = async (r: any, decision: "Approved" | "Rejected") => {
+    let remarks = "";
+    if (decision === "Rejected") {
+      remarks = window.prompt("Reason for rejection") || "";
+      if (!remarks.trim()) { flash("Reason required", "Please enter a reason for the rejection."); return; }
+    }
+    await runAction(`face-${r.name}`, async () => { await call(API.decideFaceApproval, { name: r.name, decision, remarks }); await reload(); },
+      { successTitle: decision === "Approved" ? "Face approved" : "Face rejected", successMessage: decision === "Approved" ? "The employee can now use this face for attendance." : "The employee was told to register again.", errorTitle: "Action failed" });
+  };
+  if (!requests.length) return <div className="empty"><h3>No face requests</h3><p>Nothing is waiting for your approval.</p></div>;
+  return <>{requests.map((r: any) => <div className="card" key={r.name} style={{ marginBottom: 12 }}>
+    {r.image ? <img src={r.image} alt="Face photo" style={{ width: "100%", maxHeight: 280, objectFit: "cover", borderRadius: 12 }} /> : <div className="sub">Photo not available.</div>}
+    <div style={{ marginTop: 10 }}><strong>{r.employee_name}</strong>
+      <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{r.employee}{r.department ? ` · ${r.department}` : ""}</div>
+      <div style={{ fontSize: 11.5, color: "var(--muted)" }}>{r.had_face ? "Replaces the current face (stays active until you approve)" : "First face for this employee"}</div></div>
+    <div style={{ display: "flex", gap: 9, marginTop: 12 }}>
+      <button className="btn ok" type="button" disabled={isAnyBusy} onClick={() => decide(r, "Approved")}><Ic name="check" /> {isBusy(`face-${r.name}`) ? "Saving…" : "Approve"}</button>
+      <button className="btn ghost" type="button" disabled={isAnyBusy} onClick={() => decide(r, "Rejected")}><Ic name="close" /> Reject</button>
+    </div>
+  </div>)}</>;
 }
 
 function Settings({ theme, setTheme, onLogout }: any) {
@@ -1454,7 +2475,80 @@ function Settings({ theme, setTheme, onLogout }: any) {
   </>;
 }
 
+const CAL_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const CAL_DOW = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+const calPad = (n: number) => String(n).padStart(2, "0");
+const calISO = (y: number, m: number, d: number) => `${y}-${calPad(m + 1)}-${calPad(d)}`;
+function calParse(v?: string) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v || "");
+  return m ? { y: Number(m[1]), m: Number(m[2]) - 1, d: Number(m[3]) } : null;
+}
+
+// In-app calendar (bottom sheet, same look as Select). A native <input type="date"> is
+// device/WebView dependent: some phones show the field focused but never open the
+// picker, and the OS locale decides the displayed format. This works the same on every
+// device, always shows DD/MM/YYYY, and honours min / max (ISO yyyy-mm-dd strings).
+function DateField({ label, value, onChange, icon, placeholder, min, max }: any) {
+  const [open, setOpen] = useState(false);
+  const now = new Date();
+  const todayISO = calISO(now.getFullYear(), now.getMonth(), now.getDate());
+  const sel = calParse(value);
+  const [view, setView] = useState({ y: now.getFullYear(), m: now.getMonth() });
+  const openSheet = () => {
+    // Open on the selected month; else the nearest month inside the allowed range.
+    const anchor = sel || (min && min > todayISO ? calParse(min) : null) || (max && max < todayISO ? calParse(max) : null);
+    setView(anchor ? { y: anchor.y, m: anchor.m } : { y: now.getFullYear(), m: now.getMonth() });
+    setOpen(true);
+  };
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+  const shift = (months: number) => setView((v) => { const t = v.y * 12 + v.m + months; return { y: Math.floor(t / 12), m: ((t % 12) + 12) % 12 }; });
+  const blocked = (iso: string) => Boolean((min && iso < min) || (max && iso > max));
+  const pick = (iso: string) => { onChange(iso); setOpen(false); };
+  const lead = new Date(view.y, view.m, 1).getDay();
+  const total = new Date(view.y, view.m + 1, 0).getDate();
+  const cells: (number | null)[] = [...Array(lead).fill(null), ...Array.from({ length: total }, (_, i) => i + 1)];
+  return <div className="field">
+    <label>{label}</label>
+    <button className="inp trigger" type="button" onClick={openSheet}>
+      {icon && <Ic name={icon} />}
+      <span className="tval" style={{ color: value ? "inherit" : "var(--faint)" }}>{value ? fmtDMY(value) : (placeholder || "DD/MM/YYYY")}</span>
+    </button>
+    {open && createPortal(
+      <div className="select-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
+        <div className="date-sheet" role="dialog" aria-modal="true" aria-label={label}>
+          <div className="select-sheet-head"><strong>{label}</strong><button className="ibtn" type="button" aria-label="Close" onClick={() => setOpen(false)}><Ic name="close" /></button></div>
+          <div className="cal-nav">
+            <button type="button" aria-label="Previous year" onClick={() => shift(-12)}>«</button>
+            <button type="button" aria-label="Previous month" onClick={() => shift(-1)}>‹</button>
+            <strong>{CAL_MONTHS[view.m]} {view.y}</strong>
+            <button type="button" aria-label="Next month" onClick={() => shift(1)}>›</button>
+            <button type="button" aria-label="Next year" onClick={() => shift(12)}>»</button>
+          </div>
+          <div className="cal-grid">
+            {CAL_DOW.map((d) => <div className="cal-dow" key={d}>{d}</div>)}
+            {cells.map((d, i) => {
+              if (d === null) return <span key={`b${i}`} />;
+              const iso = calISO(view.y, view.m, d);
+              const cls = `cal-day${iso === value ? " sel" : ""}${iso === todayISO ? " today" : ""}`;
+              return <button type="button" className={cls} key={iso} disabled={blocked(iso)} onClick={() => pick(iso)}>{d}</button>;
+            })}
+          </div>
+          <div className="cal-foot">
+            <button className="btn ghost" type="button" disabled={blocked(todayISO)} onClick={() => pick(todayISO)}>Today</button>
+            {value ? <button className="btn ghost" type="button" onClick={() => pick("")}>Clear</button> : null}
+          </div>
+        </div>
+      </div>, document.body)}
+  </div>;
+}
+
 function Field({ label, value, onChange, type = "text", icon, placeholder, min, max }: any) {
+  if (type === "date") return <DateField label={label} value={value} onChange={onChange} icon={icon} placeholder={placeholder} min={min} max={max} />;
   return <div className="field"><label>{label}</label><div className="inp">{icon && <Ic name={icon} />}<input type={type} value={value ?? ""} placeholder={placeholder} min={min} max={max} onChange={(e) => onChange(e.target.value)} /></div></div>;
 }
 
@@ -1463,8 +2557,9 @@ function Select({ label, value, onChange, options, icon }: any) {
     const optionValue = typeof option === "string" ? option : option.value;
     const baseText = typeof option === "string" ? option : option.label;
     const description = typeof option === "string" ? "" : option.description;
+    const disabled = typeof option === "string" ? false : !!option.disabled;
     const text = description && description !== optionValue ? `${baseText} (${description})` : baseText;
-    return { value: optionValue, label: baseText || optionValue, description, text, disabled: typeof option === "string" ? false : !!option.disabled };
+    return { value: optionValue, label: baseText || optionValue, description, disabled, text };
   }), [options]);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");

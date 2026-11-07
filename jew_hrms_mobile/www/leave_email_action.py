@@ -5,7 +5,7 @@ no_cache = 1
 
 def get_context(context):
 	context.no_cache = 1
-	from jew_hrms_mobile.api import _validate_email_action_token, _user_display_name, EMAIL_ACTION_TOKEN_VALIDITY_DAYS
+	from jew_hrms_mobile.api import _validate_email_action_token, _user_display_name, _fmt_dmy, EMAIL_ACTION_TOKEN_VALIDITY_DAYS
 
 	# The link is opened from an email, so the visiting browser may already have an
 	# unrelated logged-in Frappe session (dept head/HR also using the desk app on the
@@ -32,8 +32,8 @@ def get_context(context):
 				"name": doc.name,
 				"employee_name": doc.employee_name,
 				"leave_type": doc.leave_type,
-				"from_date": frappe.utils.formatdate(doc.from_date),
-				"to_date": frappe.utils.formatdate(doc.to_date),
+				"from_date": _fmt_dmy(doc.from_date),
+				"to_date": _fmt_dmy(doc.to_date),
 				"total_leave_days": doc.get("total_leave_days"),
 				"reason": doc.description or "-",
 				"status": doc.get("jew_hrms_approval_status") or doc.status,

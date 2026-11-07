@@ -49,7 +49,17 @@ def _temp_image(image_bytes):
 		tmp.close()
 
 
+try:
+	# Loads the dlib models (~1.3 s) as soon as this module is imported by a worker - i.e. on the first HRMS call after a restart -
+	# instead of making the first Mark In / Mark Out of that worker pay for it.
+	import face_recognition as _preloaded_face_recognition
+except Exception:
+	_preloaded_face_recognition = None
+
+
 def _face_recognition():
+	if _preloaded_face_recognition is not None:
+		return _preloaded_face_recognition
 	try:
 		import face_recognition
 	except Exception:
@@ -101,7 +111,7 @@ def deserialize_encoding(encoding_text):
 	return json.loads(encoding_text) if isinstance(encoding_text, str) else encoding_text
 
 
-def extract_face_encoding(image_data):
+def extract_face_encoding(image_data, employee=None, with_liveness=False):
 	engine, image, error = _load_image(image_data)
 	if error:
 		return error
@@ -126,7 +136,18 @@ def extract_face_encoding(image_data):
 	if not encodings:
 		return _result(False, "no_face_detected", "No face detected. Please keep your face inside the frame.", face_detected_count=1)
 	encoding = [round(float(v), 8) for v in encodings[0]]
-	return _result(True, "success", "Face template created.", encoding=encoding, face_detected_count=1)
+	extra = {}
+	if with_liveness:
+		# Passive anti-spoofing on this SAME image. Returns None when the site has it off
+		# (default) or on any error, so this can never change behaviour unless enabled.
+		try:
+			from jew_hrms_mobile import liveness_service
+			live = liveness_service.evaluate(image, locations[0], employee)
+			if live:
+				extra["liveness"] = live
+		except Exception:
+			frappe.logger("jew_hrms_mobile").error("liveness hook failed (ignored)\n%s", traceback.format_exc())
+	return _result(True, "success", "Face template created.", encoding=encoding, face_detected_count=1, **extra)
 
 
 def compare_face(saved_encoding, current_encoding):
@@ -166,10 +187,34 @@ def register_face(employee, image_data):
 
 
 def verify_face(employee, image_data, saved_encoding):
-	extracted = extract_face_encoding(image_data)
+	extracted = extract_face_encoding(image_data, employee=employee, with_liveness=True)
 	if not extracted.get("ok"):
 		return extracted
 	compare = compare_face(saved_encoding, extracted["encoding"])
+	compare["employee"] = employee
+	live = extracted.get("liveness")
+	if live:
+		compare["liveness"] = live
+		blocked = bool(compare.get("ok") and live.get("enforce") and not live.get("is_real"))
+		try:
+			from jew_hrms_mobile import liveness_service
+			liveness_service.log_attempt(employee, live, matched=compare.get("matched"), distance=compare.get("distance"), blocked=blocked)
+		except Exception:
+			pass
+		if blocked:
+			return _result(
+				False,
+				"liveness_failed",
+				"Live face not detected. Please look straight at the camera - a photo or another screen is not accepted.",
+				employee=employee, liveness=live, distance=compare.get("distance"), threshold=compare.get("threshold"),
+			)
+	return compare
+
+
+def verify_encoding(employee, encoding, saved_encoding):
+	"""Registered-face match for an encoding that was ALREADY computed (the active live scan returns the
+	encoding of the frame it chose), so the same picture is not decoded / detected / encoded a second time."""
+	compare = compare_face(saved_encoding, encoding)
 	compare["employee"] = employee
 	return compare
 

@@ -17,6 +17,8 @@ export function IconSprite() {
         <g id="search"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></g>
         <g id="close"><path d="M6 6l12 12M18 6 6 18" /></g>
         <g id="download"><path d="M12 4v11" /><path d="m7 11 5 5 5-5" /><path d="M5 20h14" /></g>
+        <g id="paperclip"><path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></g>
+        <g id="pen"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></g>
         <g id="home"><path d="M4 11 12 4l8 7" /><path d="M6 10v9h12v-9" /></g>
         <g id="leaf"><path d="M4 20c0-8 6-14 16-14 0 10-6 16-16 14z" /><path d="M5 19c4-3 8-5 12-6" /></g>
         <g id="shield"><path d="M12 3 5 6v6c0 4 3 7 7 9 4-2 7-5 7-9V6z" /></g>
@@ -35,6 +37,8 @@ export function IconSprite() {
         <g id="briefcase"><rect x="3" y="7.5" width="18" height="12.5" rx="2" /><path d="M8 7.5V6a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v1.5" /><path d="M3 12.5h18" /></g>
         <g id="eye"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></g>
         <g id="eyeoff"><path d="M3 3l18 18" /><path d="M10.6 10.6a3 3 0 0 0 4.2 4.2" /><path d="M9.4 5.2A9.9 9.9 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.3 4.1M6.1 6.1A17 17 0 0 0 2 12s3.5 7 10 7a9.9 9.9 0 0 0 3.3-.6" /></g>
+        <g id="send"><path d="M21 3 10.5 13.5" /><path d="M21 3l-6.5 18-4-7.5L3 9.5z" /></g>
+        <g id="copy"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3" /></g>
         <g id="refresh"><path d="M20 11a8 8 0 1 0-.5 4" /><path d="M20 5v6h-6" /></g>
         {/* brand: ink + spark J */}
         <g id="jmark"><path d="M15.5 4.5v11.5a5 5 0 0 1-8.4 3.7" stroke="#fff" strokeWidth={2.1} /><path d="M7 6l1.1 3.3L11.4 10.4l-3.3 1.1L7 14.8l-1.1-3.3L2.6 10.4l3.3-1.1z" fill="#0E9C8B" stroke="#0E9C8B" strokeWidth={1.4} /></g>
