@@ -34,6 +34,10 @@ from frappe.utils.xlsxutils import make_xlsx
 
 DOCTYPE = "JEW Punch Audit"
 AUDIT_ROLES = {"System Manager", "JEW HRMS Admin", "JEW HRMS HR", "JEW HRMS Owner"}
+# A user who holds this role sees ONLY their own team on the page (everyone whose Dept Head Email is theirs, plus the teams of
+# those people in turn, e.g. Bharat -> Pawan -> Pawan's employees), whatever other roles they have. Users without it see everyone.
+TEAM_ONLY_ROLE = "JEW HRMS Punch Audit Team Only"
+VIEW_ROLES = AUDIT_ROLES | {TEAM_ONLY_ROLE}
 
 DRIFT_SECONDS = 120            # phone clock this far from the server is flagged
 DRIFT_HIGH_SECONDS = 600
@@ -65,8 +69,52 @@ def _require_access():
 		frappe.throw(_("Login required"), frappe.PermissionError)
 	if user == "Administrator":
 		return
-	if not (set(frappe.get_roles(user)) & AUDIT_ROLES):
+	if not (set(frappe.get_roles(user)) & VIEW_ROLES):
 		frappe.throw(_("You do not have permission to view the punch audit."), frappe.PermissionError)
+
+
+def _team_ids(user):
+	"""Employee ids that report to `user` through the Dept Head Email chain (the user's direct reports, then the reports of
+	each of those people, up to 4 levels). Matches on the user's login/email and each employee's user_id / personal /
+	company / preferred email."""
+	emails = {str(user).strip().lower()}
+	ue = frappe.db.get_value("User", user, "email")
+	if ue:
+		emails.add(str(ue).strip().lower())
+	seen, level = set(), emails
+	for _depth in range(4):
+		if not level:
+			break
+		new = [r[0] for r in frappe.db.sql("select name from `tabEmployee` where lower(ifnull(custom_dept_head_email, '')) in %s", [tuple(level)]) if r[0] not in seen]
+		if not new:
+			break
+		seen.update(new)
+		level = set()
+		for row in frappe.db.sql("select user_id, personal_email, company_email, prefered_email from `tabEmployee` where name in %s", [tuple(new)]):
+			for x in row:
+				if x:
+					level.add(str(x).strip().lower())
+	return seen
+
+
+def _scope():
+	"""None = the user sees every employee; otherwise the set of employee ids they may see."""
+	user = frappe.session.user
+	if not user or user in ("Administrator", "Guest"):
+		return None
+	if TEAM_ONLY_ROLE not in set(frappe.get_roles(user)):
+		return None
+	return _team_ids(user)
+
+
+def _in_scope(emp):
+	sc = _scope()
+	return sc is None or emp in sc
+
+
+def _check_scope(emp):
+	if not _in_scope(emp):
+		frappe.throw(_("This employee is not in your team."), frappe.PermissionError)
 
 
 def _clean_device_id(value):
@@ -400,7 +448,10 @@ def _fetch_rows(from_date, to_date):
 				loc_cache[emp] = []
 		return loc_cache[emp]
 
+	sc = _scope()
 	for r in rows:
+		if sc is not None and r.employee not in sc:
+			continue
 		if r.checkin in seen:
 			continue
 		seen.add(r.checkin)
@@ -543,6 +594,7 @@ def get_punch_detail(checkin=None):
 	c = frappe.db.get_value("Employee Checkin", checkin, ["name", "employee", "time", "latitude", "longitude"], as_dict=True)
 	if not c:
 		frappe.throw(_("Punch not found"), frappe.DoesNotExistError)
+	_check_scope(c.employee)
 	a = frappe.db.get_value(DOCTYPE, {"checkin": checkin}, ["name", "location_name", "device_id", "reviewed_by", "reviewed_on"], as_dict=True)
 	out = {"checkin": checkin, "audit": a.name if a else None, "angle": None, "centre": None,
 	       "device_history": [], "primary_device": None, "registered_face": False,
@@ -564,6 +616,7 @@ def get_punch_detail(checkin=None):
 			where device_id = %s and punch_time >= %s group by employee, employee_name order by n desc""",
 			(a.device_id, since), as_dict=True,
 		)
+		hist = [h for h in hist if _in_scope(h.employee)]
 		primary = _primary_devices()
 		out["device_history"] = [{"employee": h.employee, "name": h.employee_name, "n": h.n, "last": str(get_datetime(h.last).date()),
 		                          "usual": primary.get(h.employee) == a.device_id} for h in hist]
@@ -587,6 +640,9 @@ def _read_private_file(url):
 def get_punch_photo(name=None, kind="punch", employee=None):
 	"""The punch photo (JEW Punch Audit row) or the employee's registered face, as an image response."""
 	_require_access()
+	_who = (employee if kind == "face" and employee else None) or (frappe.db.get_value(DOCTYPE, name, "employee") if name else None)
+	if _who:
+		_check_scope(_who)
 	if kind == "face":
 		emp = employee or (frappe.db.get_value(DOCTYPE, name, "employee") if name else None)
 		url = frappe.db.get_value("JEW Employee Face", {"employee": emp, "is_active": 1}, "face_image") if emp else None
@@ -607,6 +663,7 @@ def review_punch(checkin=None, reviewed=1, note=None):
 	c = frappe.db.get_value("Employee Checkin", checkin, ["name", "employee", "employee_name", "log_type", "time", "device_id"], as_dict=True)
 	if not c:
 		frappe.throw(_("Punch not found"), frappe.DoesNotExistError)
+	_check_scope(c.employee)
 	name = frappe.db.get_value(DOCTYPE, {"checkin": checkin}, "name")
 	if name:
 		doc = frappe.get_doc(DOCTYPE, name)
@@ -633,6 +690,8 @@ def get_settings():
 @frappe.whitelist()
 def save_settings(retention_days=None):
 	_require_access()
+	if _scope() is not None:
+		frappe.throw(_("Only HR / Admin can change the punch audit settings."), frappe.PermissionError)
 	days = cint(retention_days)
 	if days not in RETENTION_CHOICES:
 		frappe.throw(_("Retention must be one of: {0}").format(", ".join(str(x) for x in RETENTION_CHOICES)))
@@ -780,7 +839,13 @@ def _not_punched_rows(f, t):
 		""",
 		arg, as_dict=True,
 	)
-	out = {"days": len(days), "employees": [], "active_total": cint(frappe.db.count("Employee", {"status": "Active"}))}
+	sc = _scope()
+	if sc is None:
+		active_total = cint(frappe.db.count("Employee", {"status": "Active"}))
+	else:
+		emps = [e for e in emps if e.name in sc]
+		active_total = cint(frappe.db.count("Employee", {"status": "Active", "name": ["in", list(sc)]})) if sc else 0
+	out = {"days": len(days), "employees": [], "active_total": active_total}
 	if not emps:
 		return out
 	arg["n"] = tuple(e.name for e in emps)
@@ -1025,6 +1090,9 @@ def _exceptions(f, t):
 	emps = frappe.db.sql(
 		"""select name, employee_name, department, designation, company, holiday_list, default_shift, date_of_joining, ifnull(user_id, '') as user_id
 		   from `tabEmployee` where status = 'Active'""", as_dict=True)
+	sc = _scope()
+	if sc is not None:
+		emps = [e for e in emps if e.name in sc]
 	hol = defaultdict(set)
 	for h in frappe.db.sql("select parent, holiday_date from `tabHoliday` where parenttype = 'Holiday List' and holiday_date between %s and %s", (str(f), str(t))):
 		hol[h[0]].add(str(getdate(h[1])))

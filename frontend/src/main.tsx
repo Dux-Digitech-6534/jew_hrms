@@ -4,6 +4,7 @@ import { FrappeProvider } from "frappe-react-sdk";
 import { BrowserRouter } from "react-router-dom";
 import App, { ErrorBoundary } from "./App";
 import "./styles.css";
+import { initI18n } from "./i18n";
 
 function showRootFallback() {
   const root = document.getElementById("root");
@@ -14,6 +15,8 @@ function showRootFallback() {
 
 window.addEventListener("error", () => window.setTimeout(showRootFallback, 0));
 window.addEventListener("unhandledrejection", () => window.setTimeout(showRootFallback, 0));
+
+initI18n();
 
 try {
   ReactDOM.createRoot(document.getElementById("root")!).render(

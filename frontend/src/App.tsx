@@ -4,6 +4,7 @@ import { MapContainer, Marker, TileLayer, Circle, useMap, useMapEvents } from "r
 import "leaflet/dist/leaflet.css";
 import { API, call, cleanErrorMessage, logout, uploadFile } from "./api";
 import { IconSprite, Ic, BrandMark } from "./icons";
+import { LangPicker } from "./LangPicker";
 
 type Caps = {
   can_mark_attendance: boolean;
@@ -770,6 +771,7 @@ function Login({ onDone, flash }: { onDone: () => void; flash: (title: string, m
         <p className="eyebrow" style={{ textAlign: "center" }}>JEWIPL Employee app</p>
         <h1 className="h1" style={{ textAlign: "center" }}>Welcome <span className="g">back</span></h1>
         <p className="sub" style={{ textAlign: "center" }}>Sign in to mark attendance and manage your leave.</p>
+        <LangPicker compact />
         <div className="field">
           <label>Employee ID or email</label>
           <div className="inp"><Ic name="user" /><input value={username} onChange={(e) => setUsername(e.target.value)} type="text" name="usr" autoComplete="username" placeholder="EMP-00148 or email" /></div>
@@ -936,6 +938,14 @@ function Dashboard({ data, open, caps, flash, session }: any) {
 function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange, open, caps }: any) {
   const [status, setStatus] = useState<any>(initialStatus || null);
   const [verifyType, setVerifyType] = useState<"IN" | "OUT" | null>(null);
+  // Live-scan sites only: ask the server for the random challenge as soon as the verify screen opens, so the tap does not wait for it.
+  const challengeRef = useRef<{ c: any; t: number; type: string } | null>(null);
+  useEffect(() => {
+    if (!verifyType || !isLiveScanSite()) return;
+    let alive = true;
+    call(API.livenessStart, { type: verifyType }).then((c: any) => { if (alive && c?.enabled && !c.locked) challengeRef.current = { c, t: Date.now(), type: verifyType }; }).catch(() => { /* confirmVerify fetches its own */ });
+    return () => { alive = false; };
+  }, [verifyType]);
   const [coords, setCoords] = useState<GeolocationCoordinates | null>(null);
   const [gpsStatus, setGpsStatus] = useState("Captured on submit");
   const [cameraStatus, setCameraStatus] = useState("Starting camera...");
@@ -1070,7 +1080,11 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange, open
       // Ask the server whether this site needs the active live scan. Any failure here (or "enabled: false")
       // simply keeps the normal single-selfie flow below - the server still enforces its own rules.
       let challenge: any = null;
-      if (liveOn) { try { challenge = await call(API.livenessStart, { type: verifyType }); } catch { challenge = null; } }
+      if (liveOn) {
+        const pre = challengeRef.current; challengeRef.current = null;
+        if (pre && pre.type === verifyType && Date.now() - pre.t < 40000) challenge = pre.c;
+        else { try { challenge = await call(API.livenessStart, { type: verifyType }); } catch { challenge = null; } }
+      }
       let liveFrames: string[] | null = null;
       if (challenge?.enabled) {
         if (challenge.locked) throw new Error(challenge.message || "Too many failed attempts. Please try again later.");
@@ -1917,10 +1931,12 @@ const liveFilmScan = async (getVideo: () => HTMLVideoElement | null, steps: stri
       await regSleepMs(Math.max(5, gapMs - (Date.now() - started)));
     }
   };
-  await phase("Look straight at the camera", 1000, 250, matchSide, 0.8);
+  // Faster than before (was 1.0 s + 2.4 s per action): 0.65 s straight, 2.0 s per action. The closing "look straight" stays 1.0 s -
+  // people need that time to bring the head back, and cutting it caused "no final frontal frame" failures.
+  await phase("Look straight at the camera", 650, 220, matchSide, 0.8);
   for (const step of steps) {
     const blink = step === "blink";
-    await phase(REG_LIVE_PROMPTS[step] || "Follow the instruction", 2400, blink ? 80 : 250, 320, blink ? 0.6 : 0.65);
+    await phase(REG_LIVE_PROMPTS[step] || "Follow the instruction", 2000, blink ? 70 : 230, 320, blink ? 0.6 : 0.65);
   }
   await phase("Look straight again", 1000, 250, 320, 0.65);
   return frames;
@@ -2456,6 +2472,11 @@ function Settings({ theme, setTheme, onLogout }: any) {
   const doLogout = async () => { setLoggingOut(true); try { await onLogout(); } finally { setLoggingOut(false); } };
   const dark = theme === "dark";
   return <>
+    <div className="sec-lab">Language</div>
+    <div className="card" style={{ padding: "12px 15px" }}>
+      <div style={{ fontSize: 12.5, color: "var(--muted)", fontWeight: 600, marginBottom: 8 }}>Choose your app language</div>
+      <LangPicker />
+    </div>
     <div className="sec-lab">Appearance</div>
     <div className="card" style={{ padding: "4px 15px" }}>
       <div className="prow"><div className="pi"><Ic name={dark ? "moon" : "sun"} /></div><div className="pt"><strong>Dark theme</strong><span>Instrument mode for low light</span></div><button className={`switch ${dark ? "on" : ""}`} onClick={() => setTheme(dark ? "light" : "dark")} /></div>

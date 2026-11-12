@@ -22,6 +22,9 @@
   },
   {
    "role": "JEW HRMS Owner"
+  },
+  {
+   "role": "JEW HRMS Punch Audit Team Only"
   }
  ],
  "script": null,

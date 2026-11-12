@@ -364,8 +364,9 @@ def verify_active(employee, token, frames_json, scope="att"):
 				info["bind_dist"] = float(np.linalg.norm(enc_first - enc_last))
 				if info["bind_dist"] > _num("jew_hrms_liveness_bind_tolerance", 0.50):
 					ok, reason = False, "face_changed"
-			if ok:
-				# extra evidence only (never blocks in active mode): the single-image MiniFASNet score
+			if ok and _num("jew_hrms_liveness_passive", 1, int):
+				# extra evidence only (never blocks in active mode): the single-image MiniFASNet score.
+				# Set site_config jew_hrms_liveness_passive = 0 to skip it (saves ~0.4 s per scan); default keeps it.
 				passive = base.evaluate(first_rgb, metrics[info["first_idx"]]["box"], employee)
 		base._log().info(
 			"site=%s emp=%s ACTIVE scope=%s steps=%s ok=%s reason=%s frames=%s valid=%s bind=%s passive=%s ms=%.0f t_frames=%.0f t_enc_passive=%.0f full_detects=%s yaw=%s ear=%s",
