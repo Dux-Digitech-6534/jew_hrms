@@ -65,6 +65,7 @@ MESSAGES = {
 	"eyes_not_visible": "Your eyes are not clearly visible. Face the light, remove cap/glasses if possible, and try again.",
 	"no_final_frontal": "Please look straight at the camera again at the end of the scan.",
 	"face_changed": "The face changed during the scan. Please try again.",
+	"not_live": "This looks like a photo or a screen, not a live face. Please use your real face in good light and try again.",
 	"step_failed": "Live check failed. Please follow the on-screen instruction (turn your head slowly / blink) and try again.",
 }
 
@@ -234,7 +235,7 @@ def _frame_metrics(rgb, prev_nbox=None, force_full=True):
 	}
 
 
-def evaluate_steps(metrics, steps, yaw_delta=0.10, mirror=False, blink_drop=0.75, blink_recover=0.88):
+def evaluate_steps(metrics, steps, yaw_delta=0.10, mirror=False, blink_drop=0.75, blink_recover=0.88, hold=1, min_valid_ratio=0.0):
 	"""Pure function (unit-testable): did this per-frame metric series perform `steps` in order?
 	Returns (ok, reason, info). info carries the indices the caller needs for frame selection."""
 	if len(metrics) < MIN_FRAMES:
@@ -242,7 +243,7 @@ def evaluate_steps(metrics, steps, yaw_delta=0.10, mirror=False, blink_drop=0.75
 	valid = [(i, m) for i, m in enumerate(metrics) if m and m.get("faces") == 1 and "yaw" in m]
 	if sum(1 for m in metrics if m and m.get("faces", 0) > 1) >= 2:
 		return False, "multiple_faces", {}
-	if len(valid) < max(MIN_FRAMES * 0.8, 0.6 * len(metrics)):
+	if len(valid) < max(MIN_FRAMES * 0.8, max(0.6, min_valid_ratio) * len(metrics)):
 		return False, "face_not_steady", {}
 	baseline = valid[:4]
 	yaw_b = statistics.median(m["yaw"] for _, m in baseline)
@@ -263,7 +264,13 @@ def evaluate_steps(metrics, steps, yaw_delta=0.10, mirror=False, blink_drop=0.75
 			want = 1.0 if step == "turn_left" else -1.0
 			if mirror:
 				want = -want
-			hit = next((i for i, m in later if (m["yaw"] - yaw_b) * want >= yaw_delta), None)
+			vmap = dict(valid)
+
+			def _turned(j):
+				mj = vmap.get(j)
+				return mj is not None and (mj["yaw"] - yaw_b) * want >= yaw_delta
+
+			hit = next((i for i, m in later if _turned(i) and all(_turned(i + k) for k in range(1, max(1, int(hold))))), None)
 			if hit is None:
 				return False, "step_failed", {"step": step}
 			pos = hit
@@ -348,6 +355,8 @@ def verify_active(employee, token, frames_json, scope="att"):
 			yaw_delta=_num("jew_hrms_liveness_yaw_delta", 0.10),
 			mirror=bool(frappe.conf.get("jew_hrms_liveness_turn_mirror")),
 			blink_drop=_num("jew_hrms_liveness_blink_drop", 0.75),
+			hold=_num("jew_hrms_liveness_turn_hold", 1, int),
+			min_valid_ratio=_num("jew_hrms_liveness_min_valid_ratio", 0.0),
 		)
 		enc_first, passive = None, None
 		full_checks = sum(1 for m in metrics if m and m.get("full"))
@@ -368,6 +377,9 @@ def verify_active(employee, token, frames_json, scope="att"):
 				# extra evidence only (never blocks in active mode): the single-image MiniFASNet score.
 				# Set site_config jew_hrms_liveness_passive = 0 to skip it (saves ~0.4 s per scan); default keeps it.
 				passive = base.evaluate(first_rgb, metrics[info["first_idx"]]["box"], employee)
+				pmin = frappe.conf.get("jew_hrms_liveness_passive_min")
+				if pmin is not None and passive and passive.get("score") is not None and passive["score"] < float(pmin):
+					ok, reason = False, "not_live"
 		base._log().info(
 			"site=%s emp=%s ACTIVE scope=%s steps=%s ok=%s reason=%s frames=%s valid=%s bind=%s passive=%s ms=%.0f t_frames=%.0f t_enc_passive=%.0f full_detects=%s yaw=%s ear=%s",
 			site, employee, scope, steps, ok, reason, len(metrics), sum(1 for m in metrics if m and "yaw" in m),

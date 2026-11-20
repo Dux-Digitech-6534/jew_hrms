@@ -288,7 +288,7 @@ const TAB_VIEWS: ReadonlySet<View> = new Set<View>(["dashboard", "attendance", "
 const navMeta: Record<View, { title: string; sub: string; nav?: string; back?: boolean }> = {
   dashboard: { title: "JEW HRMS", sub: "Jain Engineering Works", nav: "dashboard" },
   attendance: { title: "Attendance", sub: "Mark in / out", nav: "attendance" },
-  history: { title: "History", sub: "My records", nav: "attendance", back: true },
+  history: { title: "Attendance calendar", sub: "Day-wise view & records", nav: "attendance", back: true },
   leave: { title: "Leave", sub: "Apply & track", nav: "leave" },
   lateEarly: { title: "Late / Early", sub: "Apply & track", nav: "attendance", back: true },
   onDuty: { title: "On Duty", sub: "Apply & track", nav: "attendance", back: true },
@@ -687,7 +687,7 @@ export default function App() {
           <main className={`page ${showTabs ? "" : "noTab"}`}>
             {view === "dashboard" && <Dashboard data={dashboard} open={open} caps={caps} flash={flash} session={session} />}
             {view === "attendance" && <Attendance flash={flash} open={open} caps={caps} initialStatus={adminData.attendanceStatus} onCameraActiveChange={setCameraActive} onMarked={async () => { const [dash, status] = await Promise.all([call(API.getDashboard), call(API.getTodayAttendanceStatus)]); setDashboard(dash); setAdminData((prev: any) => ({ ...prev, attendanceStatus: status })); }} />}
-            {view === "history" && <History data={history} />}
+            {view === "history" && <History data={history} caps={caps} flash={flash} />}
             {view === "leave" && <Leave data={leaveData} caps={caps} flash={flash} me={session?.employee} reload={() => open("leave")} />}
             {view === "lateEarly" && <LateEarly data={lateEarlyData} flash={flash} reload={() => open("lateEarly")} />}
             {view === "onDuty" && <OnDuty data={onDutyData} flash={flash} reload={() => open("onDuty")} />}
@@ -848,6 +848,7 @@ function MenuDrawer({ open, caps, active, session, openView, onClose, onLogout }
     caps.can_approve_on_duty && { view: "onDutyApproval", label: "On Duty approval", icon: "check" },
     caps.can_decide_cancellations && { view: "cancellationApproval", label: "Cancellations", icon: "close" },
     caps.can_view_admin && { view: "employees", label: "Employees", icon: "users" },
+    caps.can_view_admin && { view: "history", label: "Attendance calendar", icon: "calendar" },
     caps.can_view_approvers && { view: "approvers", label: "Approvers", icon: "check" },
     caps.can_register_face && { view: "face", label: "Face register", icon: "camera" },
     caps.can_approve_face && { view: "faceApproval", label: "Face approvals", icon: "check" },
@@ -1097,12 +1098,17 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange, open
       if (!capturedImage) { flash("Face required", "Please keep your full face inside the frame."); return; }
       setGpsStatus("Capturing GPS...");
       const tGps = performance.now();
-      const currentCoords = await locPromise;
+      // Employees HR marked "location not required": GPS is only tried briefly (best effort); no fix / GPS off never blocks the punch.
+      const optionalLoc = Boolean(status?.location_optional);
+      const currentCoords: GeolocationCoordinates | null = optionalLoc
+        ? await Promise.race([locPromise.catch(() => null), new Promise<null>((r) => window.setTimeout(() => r(null), 3000))])
+        : await locPromise;
       const gpsMs = Math.round(performance.now() - tGps);
-      setCoords(currentCoords); setGpsStatus("Captured"); setFaceStatus("Verifying face");
+      if (currentCoords) setCoords(currentCoords);
+      setGpsStatus(currentCoords ? "Captured" : "Skipped"); setFaceStatus("Verifying face");
       const firstTry = triesRef.current === 1;
       const clientTimings = JSON.stringify({ v: 1, try: triesRef.current, cam: firstTry ? camMsRef.current : 0, cap: capMs, gps: gpsMs, pw: usedPre ? 1 : 0, lead: Math.round(performance.now() - (firstTry ? tapRef.current : tConfirm)) });
-      const result = await call(API.markAttendance, { type: verifyType, face_image: capturedImage, latitude: currentCoords.latitude, longitude: currentCoords.longitude, accuracy: currentCoords.accuracy, timestamp: new Date().toISOString(), device_id: getDeviceId(), client_timings: clientTimings, ...(liveFrames ? { liveness_challenge: challenge.token, liveness_frames: liveFrames } : {}) });
+      const result = await call(API.markAttendance, { type: verifyType, face_image: capturedImage, latitude: currentCoords?.latitude, longitude: currentCoords?.longitude, accuracy: currentCoords?.accuracy, timestamp: new Date().toISOString(), device_id: getDeviceId(), client_timings: clientTimings, ...(liveFrames ? { liveness_challenge: challenge.token, liveness_frames: liveFrames } : {}) });
       // The punch is saved server-side at this point: a hiccup refreshing the dashboard
       // must not leave the user stuck on the verify screen.
       if (result?.attendance_status) setStatus(result.attendance_status);
@@ -1202,7 +1208,7 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange, open
       </div>}
       {completed && <div style={{ marginTop: 14 }}><Chip kind="ok" icon="check">Attendance completed</Chip></div>}
       <div style={{ marginTop: 12, display: "flex", gap: 9, justifyContent: "center", flexWrap: "wrap" }}>
-        <Chip kind={locationReady ? "ok" : "pend"} icon="pin">{locationReady ? "Geofence OK" : "No location"}</Chip>
+        <Chip kind={locationReady ? "ok" : "pend"} icon="pin">{status?.location_optional ? "Location not required" : locationReady ? "Geofence OK" : "No location"}</Chip>
         <Chip kind={faceReady ? "info" : "pend"} icon="camera">{faceReady ? "Face ready" : "Face pending"}</Chip>
       </div>
     </div>
@@ -1231,13 +1237,126 @@ function attendanceChipKind(status: string) {
   return "pend";
 }
 
-function History({ data }: any) {
+const ACAL_LEGEND: { key: string; label: string }[] = [
+  { key: "present", label: "Present" }, { key: "absent", label: "Absent" }, { key: "half_day", label: "Half Day" },
+  { key: "leave", label: "Leave" }, { key: "holiday", label: "Holiday" },
+];
+
+// Employee-wise attendance calendar: green = Present, red = Absent, yellow = Half Day (+ leave / holiday / no record).
+// An employee sees their own calendar; a department head (own team) and HR/Admin can pick an employee.
+function AttendanceCalendar({ caps, flash }: any) {
+  const nowIst = istNow();
+  const curMonth = `${nowIst.getFullYear()}-${String(nowIst.getMonth() + 1).padStart(2, "0")}`;
+  const [month, setMonth] = useState(curMonth);
+  const [employee, setEmployee] = useState("");
+  const [employees, setEmployees] = useState<any[]>([]);
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [selected, setSelected] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
+  const [pendingAction, setPendingAction] = useState("");
+  const [remark, setRemark] = useState("");
+  const { runAction, isBusy, isAnyBusy } = useActionRunner(flash);
+  const canPick = Boolean(caps?.can_view_admin);
+  useEffect(() => {
+    if (!canPick) return;
+    call(API.getEmployeeList, { team_only: 1 }).then((r: any) => setEmployees(r.employees || [])).catch(() => undefined);
+  }, [canPick]);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    call(API.getAttendanceCalendar, { month, employee })
+      .then((r: any) => { if (!cancelled) setData(r); })
+      .catch((error: any) => { if (!cancelled) { setData(null); flash("Calendar", cleanErrorMessage(error)); } })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [month, employee, reloadKey]);
+  useEffect(() => { setSelected(""); setPendingAction(""); setRemark(""); }, [month, employee]);
+  const [yy, mm] = month.split("-").map(Number);
+  const shiftMonth = (delta: number) => {
+    const t = yy * 12 + (mm - 1) + delta;
+    const next = `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}`;
+    if (next <= curMonth) setMonth(next);
+  };
+  const lead = new Date(yy, mm - 1, 1).getDay();
+  const days: any[] = data?.days || [];
+  const cells: (any | null)[] = [...Array(lead).fill(null), ...days];
+  const sel = days.find((d) => d.date === selected);
+  const todayIso = `${curMonth}-${String(nowIst.getDate()).padStart(2, "0")}`;
+  const summary = data?.summary || {};
+  const countFor = (key: string) => summary[key] ?? 0;
+  const selLabel = sel ? new Date(`${sel.date}T00:00:00`).toLocaleDateString("en-IN", { weekday: "long", day: "2-digit", month: "short", year: "numeric" }) : "";
+  const kindOf = (s: string) => s === "present" ? "ok" : s === "absent" ? "err" : s === "half_day" || s === "pending" ? "pend" : "info";
+  const submitChange = async () => {
+    if (!remark.trim()) { flash("Remark required", "Please enter a remark (reason) for the change."); return; }
+    const res = await runAction("att-change", async () => call(API.changeEmployeeAttendance, { employee: data.employee, date: sel.date, status: pendingAction, remark: remark.trim() }),
+      { successTitle: "Attendance updated", successMessage: pendingAction === "Restore" ? "Original attendance restored." : `Marked ${pendingAction}.`, errorTitle: "Update failed" });
+    if (res) { setPendingAction(""); setRemark(""); setReloadKey((k) => k + 1); }
+  };
+  return <>
+    {canPick && <Select label="Employee" icon="user" value={employee} onChange={(v: string) => setEmployee(v)}
+      options={[{ value: "", label: "My attendance", description: "" }, ...employees.map((e: any) => ({ value: e.name, label: e.label || e.employee_name || e.name, description: e.description || e.name }))]} />}
+    <div className="card" style={{ marginTop: canPick ? 12 : 0 }}>
+      <div className="acal-nav">
+        <button type="button" aria-label="Previous month" onClick={() => shiftMonth(-1)}>‹</button>
+        <strong>{CAL_MONTHS[mm - 1]} {yy}</strong>
+        <button type="button" aria-label="Next month" disabled={month >= curMonth} onClick={() => shiftMonth(1)}>›</button>
+      </div>
+      {data && !data.is_self && <div className="acal-who"><Ic name="user" /> {data.employee_name} · {data.employee}</div>}
+      <div className="acal-grid" style={{ opacity: loading ? 0.55 : 1 }}>
+        {CAL_DOW.map((d) => <div className="acal-dow" key={d}>{d}</div>)}
+        {cells.map((d, i) => d === null ? <span key={`b${i}`} /> :
+          <button type="button" key={d.date} className={`acal-d ${d.status}${d.date === todayIso ? " today" : ""}${d.date === selected ? " sel" : ""}`} onClick={() => { setPendingAction(""); setRemark(""); setSelected(d.date === selected ? "" : d.date); }}>{Number(d.date.slice(8, 10))}</button>)}
+      </div>
+      <div className="acal-legend">
+        {ACAL_LEGEND.map((l) => <span key={l.key}><i className={`acal-sw ${l.key}`} />{l.label} <b>{countFor(l.key)}</b></span>)}
+      </div>
+      {countFor("no_record") > 0 && <div style={{ fontSize: 11, color: "var(--faint)", marginTop: 8 }}>{countFor("no_record")} day(s) have no attendance record.</div>}
+    </div>
+    {sel ? <div className="card" style={{ marginTop: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "space-between" }}>
+        <strong style={{ fontSize: 13.5 }}>{selLabel}</strong>
+        {sel.label ? <Chip kind={kindOf(sel.status)}>{sel.label}</Chip> : null}
+      </div>
+      <div className="grid2" style={{ marginTop: 12 }}>
+        <Stat icon="clock" label="In" value={<span style={{ fontSize: 17 }}>{sel.in || "—"}</span>} />
+        <Stat icon="clock" label="Out" value={<span style={{ fontSize: 17 }}>{sel.out || "—"}</span>} />
+      </div>
+      <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {sel.hours ? <Chip kind="info" icon="clock">Worked {sel.hours}</Chip> : null}
+        {sel.late ? <Chip kind="pend">Late coming</Chip> : null}
+        {sel.early ? <Chip kind="pend">Early going</Chip> : null}
+        {sel.issue ? <Chip kind="pend">{sel.issue}</Chip> : null}
+        {sel.leave_type ? <Chip kind="info" icon="leaf">{sel.leave_type}</Chip> : null}
+        {sel.shift ? <Chip kind="info">{sel.shift}</Chip> : null}
+      </div>
+      {sel.manual ? <div className="acal-manual"><strong>Changed by {sel.manual.by}</strong>{sel.manual.from ? ` (was ${sel.manual.from})` : ""}<div>{sel.manual.remark}</div></div> : null}
+      {(sel.actions || []).length ? <div style={{ marginTop: 12 }}>
+        {pendingAction ? <>
+          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 4 }}>{pendingAction === "Restore" ? "Restore the original attendance" : `Mark ${pendingAction}`} · {selLabel}</div>
+          <Field label="Remark (required)" value={remark} onChange={setRemark} placeholder="Reason (e.g. work not done / forgot to punch)" />
+          <div style={{ display: "flex", gap: 9, marginTop: 10 }}>
+            <button className="btn ghost" type="button" disabled={isAnyBusy} onClick={() => { setPendingAction(""); setRemark(""); }}>Cancel</button>
+            <button className="btn" type="button" disabled={isAnyBusy || !remark.trim()} onClick={submitChange}>{isBusy("att-change") ? "Saving…" : "Confirm"}</button>
+          </div>
+        </> : <div style={{ display: "flex", gap: 9, flexWrap: "wrap" }}>
+          {sel.actions.map((a: string) => <button key={a} className={`btn ${a === "Restore" ? "ghost" : a === "Present" ? "ok" : "danger"} sm`} style={{ width: "auto", padding: "0 14px" }} type="button" onClick={() => setPendingAction(a)}>{a === "Restore" ? "Restore original" : `Mark ${a}`}</button>)}
+        </div>}
+      </div> : null}
+    </div> : <div style={{ fontSize: 11.5, color: "var(--faint)", textAlign: "center", marginTop: 10 }}>Tap a date to see the details.</div>}
+  </>;
+}
+
+function History({ data, caps, flash }: any) {
   const checkins = data?.checkins || [];
   const attendance = data?.attendance || [];
   const present = attendance.filter((a: any) => String(a.status).toLowerCase().includes("present")).length;
+  const calendar = <AttendanceCalendar caps={caps} flash={flash} />;
   const attendanceByDate: Record<string, any> = {};
   attendance.forEach((a: any) => { attendanceByDate[String(a.attendance_date)] = a; });
   return <>
+    {calendar}
+    <div className="sec-lab">My recent check-ins</div>
     <div className="grid2">
       <Stat icon="check" label="Present" value={present || attendance.length || 0} small={attendance.length ? `/${attendance.length}` : ""} />
       <Stat icon="clock" label="Records" value={checkins.length} />
@@ -1609,8 +1728,14 @@ function LateEarly({ data, flash, reload }: any) {
       if ((result as any).whatsapp?.text) wa.setWaShare({ ...(result as any).whatsapp, title: "Request submitted" });
     }
   };
-  const cancelApplication = async (name: string) => {
-    const res: any = await runAction(`cancel-${name}`, async () => { const r = await call(API.cancelLateEarly, { name }); reload(); return r; }, { successTitle: "Cancelled", successMessage: "Application cancelled.", errorTitle: "Cancel failed" });
+  const cancelApplication = async (name: string, status: string) => {
+    // A reason is always required. Once approved at some level (Pending HR / Approved) it is also e-mailed to the approvers.
+    const approvedSomewhere = status !== "Pending";
+    const input = window.prompt(approvedSomewhere ? "Reason for cancellation (required - it will be emailed to your approvers)" : "Reason for cancellation (required)");
+    if (input === null) return;
+    const reason = input.trim();
+    if (!reason) { flash("Reason required", "Please enter a reason for the cancellation."); return; }
+    const res: any = await runAction(`cancel-${name}`, async () => { const r = await call(API.cancelLateEarly, { name, reason }); reload(); return r; }, { successTitle: "Cancelled", successMessage: approvedSomewhere ? "Application cancelled. Your approvers have been notified." : "Application cancelled.", errorTitle: "Cancel failed" });
     if (res?.whatsapp?.text) wa.setWaShare({ ...res.whatsapp, title: "Application cancelled" });
   };
   const requestCancellation = async (name: string) => {
@@ -1670,10 +1795,14 @@ function LateEarly({ data, flash, reload }: any) {
           const k = cancelled ? "late_early_cancelled" : pending ? "late_early_cancel_request" : "late_early";
           return <WaButton busy={wa.waBusy === a.name} label={cancelled ? "Send cancelled message to WhatsApp group" : pending ? "Send cancellation request to WhatsApp group" : undefined} onClick={() => wa.openWa(a.name, k)} />;
         })()}
-        {a.status === "Pending" ? <button className="btn danger sm" style={{ width: "auto", padding: "0 12px" }} type="button" disabled={isAnyBusy} onClick={() => cancelApplication(a.name)}>{isBusy(`cancel-${a.name}`) ? "…" : "Cancel"}</button>
-          : a.status === "Approved" && a.jew_cancel_status === "Pending HR Approval" ? <Chip kind="pend">Cancel Pending</Chip>
-          : a.status === "Approved" ? <button className="btn ghost sm" style={{ width: "auto", padding: "0 12px" }} type="button" disabled={isAnyBusy} onClick={() => requestCancellation(a.name)}>{isBusy(`requestcancel-${a.name}`) ? "…" : "Request cancel"}</button>
-          : <Chip kind={kind}>{a.status}</Chip>}
+        {(() => {
+          const cancelPending = a.status === "Approved" && a.jew_cancel_status === "Pending HR Approval";
+          const canCancelNow = a.status === "Pending" || a.status === "Pending HR" || (a.status === "Approved" && !cancelPending && String(a.application_date || "").slice(0, 10) >= today());
+          if (canCancelNow) return <button className="btn danger sm" style={{ width: "auto", padding: "0 12px" }} type="button" disabled={isAnyBusy} onClick={() => cancelApplication(a.name, a.status)}>{isBusy(`cancel-${a.name}`) ? "…" : "Cancel"}</button>;
+          if (cancelPending) return <Chip kind="pend">Cancel Pending</Chip>;
+          if (a.status === "Approved") return <button className="btn ghost sm" style={{ width: "auto", padding: "0 12px" }} type="button" disabled={isAnyBusy} onClick={() => requestCancellation(a.name)}>{isBusy(`requestcancel-${a.name}`) ? "…" : "Request cancel"}</button>;
+          return <Chip kind={kind}>{a.status}</Chip>;
+        })()}
       </div>;
     }) : <div className="empty"><h3>No requests</h3><p>No Late Coming / Early Going requests yet.</p></div>}
     {wa.waShare && <WhatsAppSheet wa={wa.waShare} flash={flash} heading={wa.waShare.title} onClose={() => wa.setWaShare(null)} />}
@@ -1861,6 +1990,7 @@ function Admin({ open, caps, data }: any) {
       {caps.can_approve_late_early_hr && <Mod icon="check" cyan title="Late/Early — HR approval" sub="Final sign-off after Dept Head" onClick={() => open("lateEarlyApprovalHr")} />}
       {caps.can_decide_cancellations && <Mod icon="close" title="Cancellations" sub="Approve/reject cancellation requests" onClick={() => open("cancellationApproval")} />}
       {caps.can_view_admin && <Mod icon="users" cyan title="Employees" sub="Face / location status" onClick={() => open("employees")} />}
+      {caps.can_view_admin && <Mod icon="calendar" title="Attendance calendar" sub="Employee-wise day view" onClick={() => open("history")} />}
       {caps.can_view_approvers && <Mod icon="check" title="Approvers" sub="MD, HR & Department Heads" onClick={() => open("approvers")} />}
       {caps.can_register_face && <Mod icon="camera" title="Face register" sub="Enroll employee templates" onClick={() => open("face")} />}
       {caps.can_approve_face && <Mod icon="check" cyan title="Face approvals" sub="Approve employees' face photos" onClick={() => open("faceApproval")} />}
@@ -1898,8 +2028,8 @@ function FaceAdmin({ employees, flash, selectedEmployee, onCameraActiveChange }:
 const isLiveScanSite = (): boolean => typeof window !== "undefined" && (window as any).JEW_LIVENESS_ACTIVE === true;
 
 const REG_LIVE_PROMPTS: Record<string, string> = {
-  turn_left: "Turn your head to your LEFT",
-  turn_right: "Turn your head to your RIGHT",
+  turn_left: "Turn your head a little to your LEFT and hold",
+  turn_right: "Turn your head a little to your RIGHT and hold",
   blink: "Blink your eyes now",
 };
 const regSleepMs = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
@@ -1931,14 +2061,14 @@ const liveFilmScan = async (getVideo: () => HTMLVideoElement | null, steps: stri
       await regSleepMs(Math.max(5, gapMs - (Date.now() - started)));
     }
   };
-  // Faster than before (was 1.0 s + 2.4 s per action): 0.65 s straight, 2.0 s per action. The closing "look straight" stays 1.0 s -
+  // 2026-11-12 (user: "instructions change too fast, add 2-3 s so people can read and then do it"): 1.8 s straight, 3.4 s per action, 1.8 s closing straight. The closing "look straight" stays 1.0 s -
   // people need that time to bring the head back, and cutting it caused "no final frontal frame" failures.
-  await phase("Look straight at the camera", 650, 220, matchSide, 0.8);
+  await phase("Look straight at the camera", 1800, 300, matchSide, 0.8);
   for (const step of steps) {
     const blink = step === "blink";
-    await phase(REG_LIVE_PROMPTS[step] || "Follow the instruction", 2000, blink ? 70 : 230, 320, blink ? 0.6 : 0.65);
+    await phase(REG_LIVE_PROMPTS[step] || "Follow the instruction", 3400, blink ? 70 : 230, 320, blink ? 0.6 : 0.65);
   }
-  await phase("Look straight again", 1000, 250, 320, 0.65);
+  await phase("Look straight again", 1800, 300, 320, 0.65);
   return frames;
 };
 

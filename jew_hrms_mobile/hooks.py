@@ -141,6 +141,11 @@ has_permission = {
 # ---------------
 # Hook on document methods and events
 
+# Gmail daily-limit failover between the two Gmail accounts (active only where site_config has "jew_smtp_failover")
+override_doctype_class = {
+	"Email Queue": "jew_hrms_mobile.email_failover.JEWEmailQueue",
+}
+
 doc_events = {
 	"Leave Application": {
 		"before_insert": "jew_hrms_mobile.api.set_initial_leave_approval_stage",
@@ -155,7 +160,11 @@ doc_events = {
 		],
 	},
 	"Employee": {
-		"on_update": "jew_hrms_mobile.api.sync_employee_statutory_deductions",
+		"on_update": [
+			"jew_hrms_mobile.api.sync_employee_statutory_deductions",
+			# A Department Head (Dept Head Email) gets the "Punch Audit Team Only" role -> opens Punch audit, sees own team only
+			"jew_hrms_mobile.punch_audit.on_employee_update",
+		],
 	},
 	"Salary Structure Assignment": {
 		"on_submit": "jew_hrms_mobile.api.sync_statutory_deductions_on_ssa_submit",

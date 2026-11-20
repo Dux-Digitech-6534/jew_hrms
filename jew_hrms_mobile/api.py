@@ -333,7 +333,18 @@ def _assigned_locations(employee):
 	return locations
 
 
+def _location_optional(employee):
+	"""True when HR ticked 'Location Not Required for Attendance' on the employee: Mark In / Out then works with no
+	assigned location and without GPS (no geofence check)."""
+	try:
+		return bool(frappe.db.get_value("Employee", employee, "jew_location_optional"))
+	except Exception:
+		return False
+
+
 def _geofence_result(employee, latitude, longitude):
+	if _location_optional(employee):
+		return {"allowed": True, "code": "location_optional", "message": "Location not required for this employee."}
 	if latitude in (None, "") or longitude in (None, ""):
 		return {"allowed": False, "code": "outside_location", "message": "Location is required."}
 	locations = _assigned_locations(employee)
@@ -533,10 +544,11 @@ def _attendance_status_payload(employee):
 	face = _active_face(employee.name)
 	locations = _assigned_locations(employee.name)
 	completed = bool(checkin and checkout)
-	location_state = "not_assigned" if not locations else "unknown"
+	loc_optional = _location_optional(employee.name)
+	location_state = "optional" if loc_optional else ("not_assigned" if not locations else "unknown")
 	regularization = _today_regularization_resolved(employee.name)
-	can_mark_in = bool(face and locations and not checkin)
-	can_mark_out = bool(face and locations and checkin and not checkout)
+	can_mark_in = bool(face and (locations or loc_optional) and not checkin)
+	can_mark_out = bool(face and (locations or loc_optional) and checkin and not checkout)
 	status = "completed" if completed else ("in" if checkin else "not_marked")
 	status_label = "Attendance completed" if completed else (f"Marked In at {checkin_label}" if checkin_label else "Not marked today")
 	if regularization:
@@ -559,10 +571,11 @@ def _attendance_status_payload(employee):
 		"can_mark_in": can_mark_in,
 		"can_mark_out": can_mark_out,
 		"face_registered": bool(face),
-		"location_assigned": bool(locations),
+		"location_assigned": bool(locations) or loc_optional,
+		"location_optional": loc_optional,
 		"location_status": location_state,
 		"face_status": {"registered": bool(face), "last_updated_on": face.last_updated_on if face else None, **_face_approval.status_extra(employee.name)},
-		"location_details": {"assigned": len(locations), "ready": bool(locations), "status": location_state},
+		"location_details": {"assigned": len(locations), "ready": bool(locations) or loc_optional, "optional": loc_optional, "status": location_state},
 		"in_time_label": checkin_label,
 		"out_time_label": checkout_label,
 	}
@@ -1378,7 +1391,7 @@ def mark_attendance(type=None, image_data=None, latitude=None, longitude=None, a
 
 		locations = _assigned_locations(employee.name)
 		context["assigned_locations_count"] = len(locations)
-		if not locations:
+		if not locations and not _location_optional(employee.name):
 			_log_attendance_debug("location_not_assigned", context)
 			return _fail("Location not assigned. Please contact admin.", "location_not_assigned")
 
@@ -1444,6 +1457,18 @@ def mark_attendance(type=None, image_data=None, latitude=None, longitude=None, a
 
 		status = _attendance_status_payload(employee)
 		policy_result = None
+		if log_type == "IN":
+			# Arrived on time although a Late Coming request exists for today -> that request is not needed any more.
+			try:
+				_auto_cancel_unneeded_late_coming(employee, status.get("in_time") or checkin_time)
+			except Exception:
+				frappe.log_error(frappe.get_traceback(), "JEW HRMS auto-cancel of unneeded Late Coming failed")
+		if log_type == "OUT":
+			# Left on time although an Early Going request exists for today -> that request is not needed any more.
+			try:
+				_auto_cancel_unneeded_late_early(employee, "Early Going", in_time=status.get("in_time"), out_time=status.get("out_time") or checkin_time)
+			except Exception:
+				frappe.log_error(frappe.get_traceback(), "JEW HRMS auto-cancel of unneeded Early Going failed")
 		if log_type == "OUT":
 			try:
 				policy_result = _evaluate_attendance_policy(employee.name, today(), status.get("in_time"), status.get("out_time"), employee.get("default_shift"))
@@ -1564,6 +1589,360 @@ def get_attendance_history(from_date=None, to_date=None, limit=500):
 	for a in attendance:
 		a["regularization_issue_type"] = issue_by_attendance.get(a.get("name"))
 	return _ok({"checkins": checkins, "attendance": attendance})
+
+
+_CAL_ATT_STATUS = {"Present": "present", "Work From Home": "present", "Half Day": "half_day", "Absent": "absent", "On Leave": "leave"}
+_CAL_STATUS_LABEL = {
+	"present": "Present", "absent": "Absent", "half_day": "Half Day", "leave": "On Leave", "holiday": "Holiday / Weekly off",
+	"pending": "Checked in - Mark Out missing", "no_record": "No attendance record", "future": "", "before_joining": "Before joining",
+}
+
+
+@frappe.whitelist()
+def get_attendance_calendar(employee=None, month=None):
+	"""Day-by-day attendance of ONE employee for ONE month, for the mobile app's calendar view.
+	  - no `employee`  -> the logged-in employee's own calendar;
+	  - `employee`     -> that employee, allowed for their own record, for a department head (own team) and for HR/Admin.
+	Per day: present (green) / absent (red) / half_day (yellow) / leave / holiday / pending (checked in, no Mark Out) /
+	no_record (nothing recorded - NOT assumed absent, many staff are tracked elsewhere) / future / before_joining.
+	An Attendance document always wins; otherwise Holiday List, approved Leave and Employee Checkin decide."""
+	_require_login()
+	from frappe.utils import add_days as _add_days, get_last_day as _last_day
+	from jew_hrms_mobile.jew_hrms_mobile.report.attendance_based_salary_sheet import attendance_based_salary_sheet as _abs
+	own = _get_employee_for_user()
+	if employee:
+		if not frappe.db.exists("Employee", employee):
+			return _fail("Employee not found.", "not_found")
+		if not _can_view_attendance_of(employee):
+			return _fail("You do not have permission to view this employee's attendance.", "permission_denied")
+		emp = frappe.get_doc("Employee", employee)
+	else:
+		if not own:
+			return _fail("Employee not linked to current user.", "employee_not_linked")
+		emp = own
+	cur = getdate(today())
+	try:
+		first = getdate(str(month)[:7] + "-01") if month else cur.replace(day=1)
+	except Exception:
+		first = cur.replace(day=1)
+	last = _last_day(first)
+
+	manual_ready = _manual_att_fields_ready()
+	att_fields = ["name", "attendance_date", "status", "working_hours", "in_time", "out_time", "late_entry", "early_exit", "leave_type", "shift", "docstatus"]
+	if manual_ready:
+		att_fields += list(_MANUAL_ATT_FIELDS)
+	att = {}
+	for r in frappe.get_all(
+		"Attendance",
+		filters={"employee": emp.name, "attendance_date": ["between", [first, last]], "docstatus": ["<", 2]},
+		fields=att_fields,
+		order_by="docstatus asc, modified desc",
+	):
+		att.setdefault(getdate(r.attendance_date), r)
+	issue_by_att = {}
+	if att:
+		for g in frappe.get_all(
+			"JEW Attendance Regularization",
+			filters={"linked_attendance": ["in", [a.name for a in att.values()]]},
+			fields=["linked_attendance", "issue_type"],
+		):
+			issue_by_att[g.linked_attendance] = g.issue_type
+	punches = {}
+	for c in frappe.get_all(
+		"Employee Checkin",
+		filters={"employee": emp.name, "time": ["between", [str(first) + " 00:00:00", str(last) + " 23:59:59"]]},
+		fields=["time", "log_type"], order_by="time asc",
+	):
+		d = getdate(c.time)
+		slot = punches.setdefault(d, {"in": None, "out": None})
+		if c.log_type == "IN" and not slot["in"]:
+			slot["in"] = c.time
+		elif c.log_type == "OUT":
+			slot["out"] = c.time
+	leave_days = {}
+	for lv in frappe.get_all(
+		"Leave Application",
+		filters={"employee": emp.name, "docstatus": 1, "status": "Approved", "from_date": ["<=", last], "to_date": [">=", first]},
+		fields=["from_date", "to_date", "leave_type", "half_day", "half_day_date"],
+	):
+		d, end = max(getdate(lv.from_date), first), min(getdate(lv.to_date), last)
+		while d <= end:
+			half = bool(lv.half_day) and lv.half_day_date and getdate(lv.half_day_date) == d
+			leave_days[d] = {"leave_type": lv.leave_type, "half": half}
+			d = _add_days(d, 1)
+	try:
+		holidays = _abs._get_employee_holidays_in_range(emp.name, emp.get("company"), emp.get("holiday_list"), first, last, {})
+	except Exception:
+		holidays = set()
+	doj = getdate(emp.date_of_joining) if emp.get("date_of_joining") else None
+	# who may change a day's attendance (Department Head of this employee / HR / Admin - never one's own record)
+	can_change = bool(manual_ready and not (own and own.name == emp.name) and _can_view_attendance_of(emp.name))
+	window_start = _manual_att_window_start(cur)
+	locked = _salary_locked_ranges(emp.name, first, last) if can_change else []
+
+	def hm(value):
+		return get_datetime(value).strftime("%H:%M") if value else None
+
+	def hours_label(value):
+		try:
+			minutes = int(round(float(value or 0) * 60))
+		except Exception:
+			return None
+		return "{0}h {1:02d}m".format(minutes // 60, minutes % 60) if minutes > 0 else None
+
+	days, counts = [], {"present": 0, "absent": 0, "half_day": 0, "leave": 0, "holiday": 0, "pending": 0, "no_record": 0}
+	d = first
+	while d <= last:
+		row = {"date": str(d), "status": "future", "in": None, "out": None, "hours": None, "late": 0, "early": 0, "issue": None, "leave_type": None, "shift": None, "manual": None, "actions": []}
+		a, p, lv = att.get(d), punches.get(d), leave_days.get(d)
+		if doj and d < doj:
+			row["status"] = "before_joining"
+		elif a:
+			row["status"] = _CAL_ATT_STATUS.get(a.status, "present")
+			row.update({
+				"in": hm(a.in_time) or (hm(p["in"]) if p else None), "out": hm(a.out_time) or (hm(p["out"]) if p else None),
+				"hours": hours_label(a.working_hours), "late": int(a.late_entry or 0), "early": int(a.early_exit or 0),
+				"issue": issue_by_att.get(a.name), "leave_type": a.leave_type, "shift": a.shift,
+			})
+			if manual_ready and a.get("jew_manual_by"):
+				row["manual"] = {
+					"by": _user_display_name(a.jew_manual_by), "on": str(a.jew_manual_on)[:16] if a.jew_manual_on else None,
+					"remark": a.get("jew_manual_remark"), "from": a.get("jew_manual_from_status"),
+				}
+			if can_change and a.docstatus == 1 and window_start <= d <= cur and not any(s <= d <= e for s, e in locked):
+				acts = []
+				if a.status in ("Present", "Work From Home"):
+					acts = ["Half Day", "Absent"]
+				elif a.status == "Half Day":
+					acts = ["Present", "Absent"]
+				elif a.status == "Absent":
+					acts = ["Present", "Half Day"]
+				if a.get("jew_manual_by"):
+					acts.append("Restore")
+				row["actions"] = acts
+		elif d in holidays:
+			row["status"] = "holiday"
+		elif lv:
+			row["status"] = "leave"
+			row["leave_type"] = lv["leave_type"] + (" (half day)" if lv["half"] else "")
+		elif p and p["in"]:
+			row["status"] = "pending" if d <= cur else "future"
+			row["in"], row["out"] = hm(p["in"]), hm(p["out"])
+		elif d <= cur:
+			row["status"] = "no_record"
+		if row["status"] in ("leave", "holiday") and p:
+			row["in"], row["out"] = hm(p["in"]), hm(p["out"])
+		# a day with NO attendance record (nothing recorded / checked in only / holiday) can be marked by hand too
+		if can_change and not a and not lv and row["status"] in ("holiday", "pending", "no_record") and window_start <= d <= cur \
+				and not any(s <= d <= e for s, e in locked):
+			row["actions"] = ["Present", "Half Day", "Absent"]
+		row["label"] = _CAL_STATUS_LABEL.get(row["status"], "")
+		if d <= cur and row["status"] in counts:
+			counts[row["status"]] += 1
+		days.append(row)
+		d = _add_days(d, 1)
+	return _ok({
+		"employee": emp.name, "employee_name": emp.get("employee_name") or emp.name, "month": str(first)[:7], "today": str(cur),
+		"is_self": bool(own and own.name == emp.name), "can_change": can_change, "days": days, "summary": counts,
+	})
+
+
+def _attendance_view_all(user=None):
+	"""Who may see EVERY employee's attendance calendar: the MD / owner (JEW HRMS Owner), HR (JEW HRMS HR) and plain
+	System Managers. Everybody else - including a Department Head who also holds the JEW HRMS Admin / System Manager
+	role - only sees their own team (+ their own record)."""
+	u = user or frappe.session.user
+	roles = _roles(u)
+	if u == "Administrator" or "JEW HRMS Owner" in roles or "JEW HRMS HR" in roles:
+		return True
+	# A plain System Manager (IT / admin) sees everyone - but a System Manager who is ALSO somebody's
+	# Department Head (e.g. Ajay Mishra) is treated as a Department Head: own team only.
+	return bool("System Manager" in roles and not _is_any_dept_head(u))
+
+
+def _attendance_team_names(user=None):
+	"""Names of the active employees a Department Head covers in the attendance calendar: everyone whose Department
+	Head he is AND, level by level, the teams of the Department Heads who report to him (Bharat Jha -> Pawan Kumar
+	Prajapati -> Pawan's team). Loops are cut (every person is visited once) and the depth is capped."""
+	u = user or frappe.session.user
+	emails = {str(u).lower(), str(frappe.db.get_value("User", u, "email") or u).lower()}
+	seen_emails, names = set(emails), set()
+	frontier = set(emails)
+	for _ in range(6):
+		if not frontier:
+			break
+		rows = frappe.get_all(
+			"Employee", filters={"status": "Active", "custom_dept_head_email": ["in", sorted(frontier)]},
+			fields=["name", "user_id", "company_email"])
+		frontier = set()
+		for r in rows:
+			if r.name in names:
+				continue
+			names.add(r.name)
+			for em in (r.user_id, r.company_email):
+				if em and str(em).lower() not in seen_emails:
+					seen_emails.add(str(em).lower())
+					frontier.add(str(em).lower())
+	return names
+
+
+def _can_view_attendance_of(employee, user=None):
+	"""May `user` see (and, as a Department Head / HR / MD, change) this employee's attendance calendar?"""
+	u = user or frappe.session.user
+	if _attendance_view_all(u):
+		return True
+	own = _get_employee_for_user(u)
+	if own and own.name == employee:
+		return True
+	if _is_any_dept_head(u):
+		try:
+			return employee in _attendance_team_names(u)
+		except Exception:
+			return False
+	return False
+
+
+_MANUAL_ATT_FIELDS = ("jew_manual_by", "jew_manual_on", "jew_manual_from_status", "jew_manual_remark")
+
+
+def _manual_att_fields_ready():
+	"""The 4 audit fields on Attendance exist on this site (created once on jewipl)."""
+	try:
+		meta = frappe.get_meta("Attendance")
+		return all(meta.has_field(f) for f in _MANUAL_ATT_FIELDS)
+	except Exception:
+		return False
+
+
+def _manual_att_window_start(cur):
+	"""Attendance can be changed by hand only for the CURRENT and the PREVIOUS calendar month."""
+	first_of_month = cur.replace(day=1)
+	return first_of_month.replace(year=first_of_month.year - 1, month=12) if first_of_month.month == 1 else first_of_month.replace(month=first_of_month.month - 1)
+
+
+def _salary_locked_ranges(employee, first, last):
+	"""Periods of SUBMITTED Salary Slips of this employee touching [first, last] - attendance inside them is final."""
+	try:
+		return [(getdate(s.start_date), getdate(s.end_date)) for s in frappe.get_all(
+			"Salary Slip", filters={"employee": employee, "docstatus": 1, "start_date": ["<=", last], "end_date": [">=", first]},
+			fields=["start_date", "end_date"])]
+	except Exception:
+		return []
+
+
+@frappe.whitelist()
+def change_employee_attendance(employee=None, date=None, status=None, remark=None):
+	"""A Department Head (own team) / HR / MD marks ONE day's attendance of an employee by hand - Present, Half Day or
+	Absent - for today or an earlier day, or 'Restore' (undo the manual change). The day may already have an attendance
+	(any status except On Leave) or none at all (then an Attendance is created and submitted). A remark (reason) is
+	REQUIRED. Rules: never one's own record; not in the future; only this month and last month; not on a day with an
+	approved leave; not once a submitted Salary Slip covers the day. The original status, who/when/why are kept on the
+	Attendance (+ a timeline comment); the employee and HR get an in-app notification (no e-mail). Payroll and the
+	calendar read Attendance, so they follow."""
+	_require_login()
+	if not _manual_att_fields_ready():
+		return _fail("Manual attendance change is not set up on this site.", "setup_incomplete")
+	if not employee or not frappe.db.exists("Employee", employee):
+		return _fail("Employee not found.", "not_found")
+	own = _get_employee_for_user()
+	if own and own.name == employee:
+		return _fail("You cannot change your own attendance.", "permission_denied")
+	if not _can_view_attendance_of(employee):
+		return _fail("You do not have permission to change this employee's attendance.", "permission_denied")
+	if status not in ("Present", "Half Day", "Absent", "Restore"):
+		return _fail("Status must be Present, Half Day, Absent or Restore.", "validation_error")
+	remark = (remark or "").strip()
+	if not remark:
+		return _fail("Please enter a remark (reason) for the change.", "validation_error")
+	try:
+		day = getdate(date)
+	except Exception:
+		return _fail("A valid date is required.", "validation_error")
+	cur = getdate(today())
+	if day > cur:
+		return _fail("Attendance cannot be changed for a future date.", "validation_error")
+	if day < _manual_att_window_start(cur):
+		return _fail("Attendance can be changed only for this month and last month.", "validation_error")
+	if any(s <= day <= e for s, e in _salary_locked_ranges(employee, day, day)):
+		return _fail("A Salary Slip already covers this date - the attendance can no longer be changed.", "locked")
+	emp_doc = frappe.get_doc("Employee", employee)
+	name = frappe.db.get_value("Attendance", {"employee": employee, "attendance_date": day, "docstatus": 1}, "name")
+	att = frappe.db.get_value("Attendance", name, ["status", *_MANUAL_ATT_FIELDS], as_dict=True) if name else None
+	before = att.status if att else "No record"
+	was_manual = bool(att and att.jew_manual_by)
+	by_name = _user_display_name(frappe.session.user)
+	pretty = _fmt_dmy(day)
+	emp_name = emp_doc.get("employee_name") or employee
+
+	if status == "Restore":
+		if not was_manual:
+			return _fail("This attendance has not been changed by hand.", "invalid_status")
+		original = att.jew_manual_from_status or "Present"
+		att_doc = frappe.get_doc("Attendance", name)
+		att_doc.add_comment("Info", "Attendance changed {0} -> {1} (restored) by {2}. Remark: {3}".format(before, original, by_name, remark))
+		if original == "No record":
+			att_doc.flags.ignore_permissions = True
+			att_doc.cancel()   # the day had no attendance before the manual change
+		else:
+			frappe.db.set_value("Attendance", name, {"status": original, "jew_manual_by": None, "jew_manual_on": None, "jew_manual_from_status": None, "jew_manual_remark": None})
+		new_status = original
+		msg = "{0}'s attendance for {1} was restored to {2} by {3}. Remark: {4}".format(emp_name, pretty, original, by_name, remark)
+	else:
+		if before == status:
+			return _fail("This day is already marked {0}.".format(status), "invalid_status")
+		if before == "On Leave":
+			return _fail("This day is an On Leave day - it cannot be changed here.", "invalid_status")
+		if att:
+			frappe.db.set_value("Attendance", name, {
+				"status": status, "jew_manual_by": frappe.session.user, "jew_manual_on": now_datetime(),
+				"jew_manual_from_status": att.jew_manual_from_status if was_manual else before, "jew_manual_remark": remark,
+			})
+			att_doc = frappe.get_doc("Attendance", name)
+		else:
+			if frappe.db.exists("Leave Application", {"employee": employee, "docstatus": 1, "status": "Approved", "from_date": ["<=", day], "to_date": [">=", day]}):
+				return _fail("This employee has an approved leave on this date - attendance cannot be marked here.", "invalid_status")
+			if emp_doc.get("date_of_joining") and getdate(emp_doc.date_of_joining) > day:
+				return _fail("This date is before the employee's joining date.", "invalid_status")
+			att_doc = frappe.new_doc("Attendance")
+			att_doc.employee = employee
+			if emp_doc.get("company"):
+				att_doc.company = emp_doc.company
+			att_doc.attendance_date = day
+			att_doc.status = status
+			punches = frappe.get_all("Employee Checkin", filters={"employee": employee, "time": ["between", [str(day) + " 00:00:00", str(day) + " 23:59:59"]]}, fields=["time", "log_type"], order_by="time asc")
+			first_in = next((c.time for c in punches if c.log_type == "IN"), None)
+			last_out = next((c.time for c in reversed(punches) if c.log_type == "OUT"), None)
+			if first_in and att_doc.meta.has_field("in_time"):
+				att_doc.in_time = first_in
+			if last_out and att_doc.meta.has_field("out_time"):
+				att_doc.out_time = last_out
+			att_doc.jew_manual_by = frappe.session.user
+			att_doc.jew_manual_on = now_datetime()
+			att_doc.jew_manual_from_status = "No record"
+			att_doc.jew_manual_remark = remark
+			att_doc.flags.ignore_permissions = True
+			frappe.db.savepoint("jew_manual_att")
+			try:
+				att_doc.insert()
+				att_doc.submit()
+			except Exception as exc:
+				frappe.db.rollback(save_point="jew_manual_att")
+				return _fail("Attendance could not be marked: {0}".format(frappe.utils.strip_html(str(exc))[:200]), "validation_error")
+			name = att_doc.name
+		att_doc.add_comment("Info", "Attendance changed {0} -> {1} by {2}. Remark: {3}".format(before, status, by_name, remark))
+		new_status = status
+		if before == "No record":
+			msg = "{0}'s attendance for {1} was marked {2} by {3} (there was no attendance record). Remark: {4}".format(emp_name, pretty, status, by_name, remark)
+		else:
+			msg = "{0}'s attendance for {1} was changed from {2} to {3} by {4}. Remark: {5}".format(emp_name, pretty, before, status, by_name, remark)
+	frappe.db.commit()
+	try:
+		_safe_insert_notification(employee, "Attendance changed: {0}".format(pretty), msg, "Warning", "Attendance", name)
+		recipients = [r for r in [_applicant_email(emp_doc)] + list(_hr_emails() or []) if r and r != frappe.session.user]
+		_desk_bell_notify(recipients, att_doc, msg)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "JEW HRMS manual attendance change notification failed")
+	return _ok({"attendance": name, "employee": employee, "date": str(day), "status": new_status}, "Attendance updated")
 
 
 @frappe.whitelist()
@@ -2541,6 +2920,38 @@ def view_leave_attachment(token=None):
 	frappe.local.response["display_content_as"] = "inline"
 
 
+def _notify_dept_head_stage_progress(doc, employee_doc, level_label, approver_name, next_status=None, final=False):
+	"""Keep the employee's Department Head informed: every time a stage of one of their reports' leave applications
+	is approved (MD, HR final - and a Department Head stage approved by someone else), the Department Head gets an
+	in-app notification (Desk bell linked to the Leave Application + the mobile app's notification list) saying which
+	stage was approved and what comes next. In-app only - no e-mail, so it does not add to the mail volume. The
+	Department Head is not notified about an approval they gave themselves. Best-effort: never breaks the approval."""
+	try:
+		dh = _employee_dept_head_email(employee_doc)
+		if not dh or dh == frappe.session.user:
+			return
+		emp_name = employee_doc.get("employee_name") or employee_doc.name
+		if doc.from_date == doc.to_date:
+			dates = _fmt_dmy(doc.from_date)
+		else:
+			dates = "{0} to {1}".format(_fmt_dmy(doc.from_date), _fmt_dmy(doc.to_date))
+		who = " ({0})".format(approver_name) if approver_name else ""
+		if final:
+			tail = "Final approval is done - the leave is Approved."
+		elif next_status:
+			tail = "Now: {0}.".format(next_status)
+		else:
+			tail = ""
+		message = "{emp}'s {lt} ({dates}) was approved by {level}{who}. {tail}".format(
+			emp=emp_name, lt=doc.leave_type or "leave", dates=dates, level=level_label, who=who, tail=tail).strip()
+		_desk_bell_notify([dh], doc, message)
+		dh_emp = frappe.db.get_value("Employee", {"user_id": dh}, "name")
+		if dh_emp:
+			_safe_insert_notification(dh_emp, "Leave approved by {0}: {1}".format(level_label, emp_name), message, "Info", "Leave Application", doc.name)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "JEW HRMS Department Head stage-progress notification failed")
+
+
 def _notify_stage_advance(doc, employee_doc, level_label, approver_name, next_status):
 	"""After a stage is approved: notify the applicant + email the next approver (with buttons)."""
 	ctx = _leave_email_context(doc, employee_doc)
@@ -2553,6 +2964,7 @@ def _notify_stage_advance(doc, employee_doc, level_label, approver_name, next_st
 	_send_stage_request_email(doc, employee_doc, next_status, ctx)
 	_safe_insert_notification(doc.employee, "Leave approved by {0}".format(level_label),
 	                          "Now {0}.".format(next_status), "Info", "Leave Application", doc.name)
+	_notify_dept_head_stage_progress(doc, employee_doc, level_label, approver_name, next_status=next_status)
 
 
 def _notify_final_approval(doc, employee_doc, approver_name):
@@ -2561,6 +2973,7 @@ def _notify_final_approval(doc, employee_doc, approver_name):
 	if appl:
 		_send_template_email([appl], "Leave - Employee Final Approval", ctx, doc)
 	_safe_insert_notification(doc.employee, "Leave approved", "Your leave request is approved.", "Info", "Leave Application", doc.name)
+	_notify_dept_head_stage_progress(doc, employee_doc, "HR (final)", approver_name, final=True)
 
 
 def _notify_rejection(doc, employee_doc, level_label, remarks):
@@ -4162,7 +4575,7 @@ def get_notifications():
 		))
 	if employee and not _active_face(employee.name):
 		items.append({"type": "warning", "title": "Face not registered", "message": "Ask HR to register your face before marking attendance."})
-	if employee and not _assigned_locations(employee.name):
+	if employee and not _assigned_locations(employee.name) and not _location_optional(employee.name):
 		items.append({"type": "warning", "title": "Location not assigned", "message": "Ask HR to assign an attendance geofence."})
 	return _ok({"notifications": items})
 
@@ -5308,7 +5721,7 @@ def get_approvers_overview():
 
 
 @frappe.whitelist()
-def get_employee_list(search=None, limit=0):
+def get_employee_list(search=None, limit=0, team_only=0):
 	_require_login()
 	is_admin_access = _can_access_admin()
 	is_dept_head = _is_any_dept_head()
@@ -5324,12 +5737,17 @@ def get_employee_list(search=None, limit=0):
 	# so fetching everyone is cheap; only cap when a caller explicitly asks for less.
 	limit = min(int(limit), 5000) if limit else 0
 	filters = {"status": "Active"}
-	if not is_admin_access:
+	# team_only=1 (the attendance calendar picker): a Department Head sees only their own team even when they also
+	# hold the JEW HRMS Admin role; only MD / owner / HR keep the full list.
+	restrict_to_team = str(team_only) in ("1", "true", "True") and not _attendance_view_all()
+	if not is_admin_access or restrict_to_team:
 		# Department head (no admin role): restrict directory to their own team PLUS
 		# their own employee record (so they can self face-register / self-assign).
 		u = frappe.session.user
 		uemail = frappe.db.get_value("User", u, "email") or u
 		team = frappe.get_all("Employee", filters={"status": "Active", "custom_dept_head_email": ["in", list({uemail, u})]}, pluck="name")
+		if restrict_to_team:
+			team = sorted(_attendance_team_names(u))   # attendance calendar: also the teams of the Department Heads under him
 		own = _get_employee_for_user(u)
 		if own and own.name not in team:
 			team.append(own.name)
@@ -5627,17 +6045,159 @@ def get_my_late_early(month=None):
 	return _ok({"applications": rows})
 
 
+def _send_late_early_cancelled_email(doc, employee_doc, prior_status, reason, auto_time=None):
+	"""A Late Coming / Early Going request was cancelled - by the employee, or (auto_time given, 'HH:MM') automatically
+	because the employee turned out to be on time (checked in on time / checked out on time). If it had already been
+	approved at some level (status was 'Pending HR' or 'Approved'), mail those approvers - the Department Head and
+	HR - what happened, including the reason. A request that was still 'Pending' (nobody approved yet) only gets a
+	Desk bell for the Department Head - no mail. Best-effort: never breaks the cancel itself."""
+	try:
+		emp_name = employee_doc.get("employee_name") or employee_doc.name
+		day = _fmt_dmy(doc.application_date)
+		is_late = doc.application_type == "Late Coming"
+		dh = doc.get("dept_head_approved_by") or _employee_dept_head_email(employee_doc)
+		if auto_time:
+			came = "came to the office on time (checked in at {0})".format(auto_time) if is_late else "left on time (checked out at {0})".format(auto_time)
+		if prior_status == "Pending":
+			if dh:
+				if auto_time:
+					msg = "{0} {1}, so their {2} request for {3} (pending your approval) was cancelled automatically.".format(emp_name, came, doc.application_type, day)
+				else:
+					msg = "{0} cancelled their {1} request for {2} (it was pending your approval) - reason: {3}".format(emp_name, doc.application_type, day, reason or "-")
+				_desk_bell_notify([dh], doc, msg)
+			return
+		recipients = []
+		for r in [dh] + list(_hr_emails() or []):
+			if r and "@" in r and r not in recipients:
+				recipients.append(r)
+		if not recipients:
+			return
+		try:
+			hh, mm = str(doc.expected_time).split(":")[:2]
+			time_label = "{0:02d}:{1:02d}".format(int(hh), int(mm))
+		except Exception:
+			time_label = str(doc.expected_time or "-")
+		if prior_status == "Approved":
+			was = "It had been approved by the Department Head and HR."
+		else:
+			was = "It had been approved by the Department Head and was waiting for HR approval."
+		esc = frappe.utils.escape_html
+		if auto_time:
+			lead = (
+				"<p><strong>{emp}</strong> ({eid}) {came}, so their <strong>{kind}</strong> request "
+				"for <strong>{day}</strong> (expected time <strong>{tm}</strong>) was <strong>cancelled automatically</strong>.</p>"
+			).format(emp=esc(emp_name), eid=esc(employee_doc.name), came=came, kind=esc(doc.application_type or "-"), day=day, tm=time_label)
+			why_line = ""
+			subject = "{0} request auto-cancelled ({1}) - {2} ({3})".format(doc.application_type, "came on time" if is_late else "left on time", emp_name, day)
+			bell = "{0} {1} - {2} request for {3} was cancelled automatically.".format(emp_name, came, doc.application_type, day)
+		else:
+			lead = (
+				"<p><strong>{emp}</strong> ({eid}) has <strong>cancelled</strong> their <strong>{kind}</strong> request "
+				"for <strong>{day}</strong> (expected time <strong>{tm}</strong>).</p>"
+			).format(emp=esc(emp_name), eid=esc(employee_doc.name), kind=esc(doc.application_type or "-"), day=day, tm=time_label)
+			why_line = "<p><strong>Reason for cancellation:</strong> {0}</p>".format(esc(reason or "-"))
+			subject = "{0} request cancelled - {1} ({2})".format(doc.application_type, emp_name, day)
+			bell = "{0} cancelled their {1} request for {2} - reason: {3}".format(emp_name, doc.application_type, day, reason or "-")
+		message = (
+			"<p>Hello,</p>" + lead +
+			"<p>{was}</p><p><strong>Original reason:</strong> {orig}</p>".format(was=was, orig=esc(doc.get("reason") or "-")) + why_line +
+			"<p>No further action is needed - the request is cancelled and no longer counts toward the monthly Late Coming / Early Going limit.</p>"
+			"<p style=\"color:#64707a;font-size:12.5px;margin-top:14px;\">This is an information-only message.</p>"
+		)
+		frappe.sendmail(
+			recipients=recipients, subject=subject, message=message, sender=_hrms_sender_email(),
+			reference_doctype=doc.doctype, reference_name=doc.name,
+		)
+		_desk_bell_notify(recipients, doc, bell)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "JEW HRMS late/early cancelled notification failed")
+
+
+def _auto_cancel_unneeded_late_early(employee_doc, application_type, in_time=None, out_time=None):
+	"""Late Coming (checked after Mark IN) / Early Going (checked after Mark OUT): if the employee has such a request
+	for that day (Pending / Pending HR / Approved) but actually turned out to be ON TIME - the attendance policy does
+	not flag that punch as a Late Coming / Early Going (shift start + late grace, shift end - early grace, incl. On
+	Duty and festival adjustments) - the request is not needed: cancel it automatically (frees the monthly limit),
+	tell the employee in the app, and tell the approvers exactly as for a manual cancellation (mail to whoever
+	approved it: Department Head + HR; a still-Pending request only gets the Department Head a bell).
+	Returns the names cancelled. Best-effort, the caller wraps it."""
+	is_late = application_type == "Late Coming"
+	punch = get_datetime(in_time if is_late else out_time)
+	if not punch:
+		return []
+	day = punch.date()
+	names = frappe.get_all(
+		"JEW Late Early Application",
+		filters={"employee": employee_doc.name, "application_type": application_type, "application_date": day,
+			"status": ["in", ["Pending", "Pending HR", "Approved"]]},
+		pluck="name",
+	)
+	if not names:
+		return []
+	result = _evaluate_attendance_policy(
+		employee_doc.name, day, get_datetime(in_time) if in_time else None, get_datetime(out_time) if out_time else None,
+		employee_doc.get("default_shift"))
+	if result.get("ok") is False:
+		return []  # no policy configured - cannot judge, leave the request alone
+	if any(i.get("issue_type") == application_type for i in (result.get("issues") or [])):
+		return []  # genuinely late / early: the request is still needed
+	at = punch.strftime("%H:%M")
+	cancelled = []
+	for name in names:
+		doc = frappe.get_doc("JEW Late Early Application", name)
+		prior = doc.status
+		doc.status = "Cancelled"
+		doc.jew_cancel_reason = ("Auto-cancelled: employee checked in on time at {0}." if is_late else "Auto-cancelled: employee checked out on time at {0}.").format(at)
+		doc.jew_cancel_requested_on = now_datetime()
+		doc.save(ignore_permissions=True)
+		cancelled.append(name)
+		_safe_insert_notification(
+			employee_doc.name, "{0} request cancelled automatically".format(application_type),
+			("You checked in on time at {0}, so your Late Coming request for {1} was cancelled automatically." if is_late
+				else "You checked out on time at {0}, so your Early Going request for {1} was cancelled automatically.").format(at, _fmt_dmy(day)),
+			"Info", "JEW Late Early Application", doc.name)
+		_send_late_early_cancelled_email(doc, employee_doc, prior, doc.jew_cancel_reason, auto_time=at)
+	frappe.db.commit()
+	return cancelled
+
+
+def _auto_cancel_unneeded_late_coming(employee_doc, in_time):
+	return _auto_cancel_unneeded_late_early(employee_doc, "Late Coming", in_time=in_time)
+
+
 @frappe.whitelist()
-def cancel_late_early(name=None):
+def cancel_late_early(name=None, reason=None):
+	"""The employee cancels their own Late Coming / Early Going request, effective immediately (no HR step):
+	  - 'Pending' (nobody approved yet)       -> cancelled; reason REQUIRED (shown to the Department Head
+	    in his Desk bell, no e-mail);
+	  - 'Pending HR' / 'Approved' (approved at some level) -> cancelled; reason REQUIRED and e-mailed to the
+	    approvers (Department Head + HR). An Approved request for a PAST date still has to go through the HR
+	    'Request cancel' flow (request_late_early_cancellation) - cancelling it directly would only free the
+	    monthly limit after the fact."""
 	employee = _get_current_employee()
+	if not name or not frappe.db.exists("JEW Late Early Application", name):
+		return _fail("Application not found.", "not_found")
 	doc = frappe.get_doc("JEW Late Early Application", name)
 	if doc.employee != employee.name and not _is_admin():
 		return _fail("You do not have permission.", "permission_denied")
-	if doc.status != "Pending":
-		return _fail("Only a Pending application can be cancelled.", "invalid_status")
+	prior = doc.status
+	if prior not in ("Pending", "Pending HR", "Approved"):
+		return _fail("This application can no longer be cancelled.", "invalid_status")
+	if doc.get("jew_cancel_status") == CANCEL_REQUEST_STATUSES["pending_hr"]:
+		return _fail("A cancellation request is already pending with HR for this application.", "already_pending")
+	reason = (reason or "").strip()
+	if not reason:
+		return _fail("Please enter a reason for the cancellation.", "validation_error")
+	if prior == "Approved" and getdate(doc.application_date) < getdate(today()):
+		return _fail("This approved request is for a past date - please use 'Request cancel' so HR can approve the cancellation.", "invalid_status")
+	employee_doc = frappe.get_doc("Employee", doc.employee)
 	doc.status = "Cancelled"
+	if reason:
+		doc.jew_cancel_reason = reason
+	doc.jew_cancel_requested_on = now_datetime()
 	doc.save(ignore_permissions=True)
 	frappe.db.commit()
+	_send_late_early_cancelled_email(doc, employee_doc, prior, reason)
 	return _ok({"whatsapp": _safe_request_whatsapp("late_early_cancelled", doc)}, "Application cancelled")
 
 

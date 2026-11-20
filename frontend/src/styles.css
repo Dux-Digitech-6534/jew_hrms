@@ -285,3 +285,33 @@ button,input,select,textarea{font:inherit}button{border:0;background:none;cursor
 .cal-day:disabled{opacity:.28;cursor:not-allowed}
 .cal-foot{display:flex;gap:8px}
 .cal-foot .btn{height:42px}
+
+/* ---- attendance calendar (employee-wise day view) ---- */
+:root{--acal-green:#1FA971;--acal-red:#E5484D;--acal-yellow:#F5C518;--acal-leave:#6D8DF2}
+.acal-nav{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:10px}
+.acal-nav strong{flex:1;text-align:center;font-size:14px}
+.acal-nav button{width:38px;height:38px;border:1px solid var(--hair);border-radius:10px;background:var(--surface);color:var(--text);font-size:17px;line-height:1;cursor:pointer}
+.acal-nav button:disabled{opacity:.3;cursor:not-allowed}
+.acal-who{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin:0 0 10px}
+.acal-who .ic{width:14px;height:14px}
+.acal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px}
+.acal-dow{font-size:11px;color:var(--faint);text-align:center;padding:4px 0;font-weight:600}
+.acal-d{aspect-ratio:1;border:0;border-radius:11px;font-family:var(--font-mono);font-size:13px;font-weight:600;color:var(--muted);background:var(--surface-3);cursor:pointer;position:relative}
+.acal-d.present{background:var(--acal-green);color:#fff}
+.acal-d.absent{background:var(--acal-red);color:#fff}
+.acal-d.half_day{background:var(--acal-yellow);color:#4a3a00}
+.acal-d.leave{background:var(--acal-leave);color:#fff}
+.acal-d.holiday{background:var(--surface-3);color:var(--faint)}
+.acal-d.pending{background:var(--pend-bg);color:var(--pend);box-shadow:inset 0 0 0 1.5px var(--pend)}
+.acal-d.no_record{background:none;color:var(--faint);box-shadow:inset 0 0 0 1px var(--hair)}
+.acal-d.future{background:none;color:var(--f4)}
+.acal-d.before_joining{background:none;color:var(--f4);opacity:.35}
+.acal-d.today{outline:2px solid var(--iris);outline-offset:1px}
+.acal-d.sel{box-shadow:0 0 0 2px var(--surface),0 0 0 4px var(--iris)}
+.acal-legend{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:14px;font-size:11.5px;color:var(--muted)}
+.acal-legend b{color:var(--text);font-family:var(--font-mono)}
+.acal-sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:middle;background:var(--surface-3)}
+.acal-sw.present{background:var(--acal-green)} .acal-sw.absent{background:var(--acal-red)} .acal-sw.half_day{background:var(--acal-yellow)} .acal-sw.leave{background:var(--acal-leave)}
+
+.acal-manual{margin-top:10px;padding:9px 11px;border-radius:10px;background:var(--pend-bg);color:var(--text);font-size:12px;line-height:1.45}
+.acal-manual strong{font-weight:700}

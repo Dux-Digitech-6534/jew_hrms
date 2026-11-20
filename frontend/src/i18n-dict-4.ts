@@ -1,5 +1,10 @@
 // part 4: messages that come from the SERVER (api.py / face_approval.py / liveness_active.py / face_service.py) + small gaps found by the crawl
 export const DICT_4: Array<[string, string, string]> = [
+  // ---- anti-spoof (2026-11-12)
+  ["Turn your head a little to your LEFT and hold", "अपना सिर थोड़ा अपनी बाईं ओर घुमाएँ और रोके रखें", "Apna sir thoda apni LEFT taraf ghumayein aur roke rakhein"],
+  ["Turn your head a little to your RIGHT and hold", "अपना सिर थोड़ा अपनी दाईं ओर घुमाएँ और रोके रखें", "Apna sir thoda apni RIGHT taraf ghumayein aur roke rakhein"],
+  ["This looks like a photo or a screen, not a live face. Please use your real face in good light and try again.", "यह फोटो या स्क्रीन जैसा लग रहा है, असली चेहरा नहीं। कृपया अपना असली चेहरा अच्छी रोशनी में दिखाएँ और फिर कोशिश करें।", "Ye photo ya screen jaisa lag raha hai, asli face nahi. Please apna asli face achhi roshni me dikhayein aur dobara try karein."],
+
   // ---- small gaps
   ["days", "दिन", "din"],
   ["day", "दिन", "din"],

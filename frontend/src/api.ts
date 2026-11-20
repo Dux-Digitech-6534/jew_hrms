@@ -8,6 +8,8 @@ export const API = {
   markAttendance: "jew_hrms_mobile.api.mark_attendance",
   livenessStart: "jew_hrms_mobile.api.liveness_start",
   getAttendanceHistory: "jew_hrms_mobile.api.get_attendance_history",
+  getAttendanceCalendar: "jew_hrms_mobile.api.get_attendance_calendar",
+  changeEmployeeAttendance: "jew_hrms_mobile.api.change_employee_attendance",
   getFaceStatus: "jew_hrms_mobile.api.get_face_status",
   registerEmployeeFace: "jew_hrms_mobile.api.register_employee_face",
   registerMyFace: "jew_hrms_mobile.face_approval.register_my_face",

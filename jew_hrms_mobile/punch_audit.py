@@ -69,18 +69,35 @@ def _require_access():
 		frappe.throw(_("Login required"), frappe.PermissionError)
 	if user == "Administrator":
 		return
-	if not (set(frappe.get_roles(user)) & VIEW_ROLES):
-		frappe.throw(_("You do not have permission to view the punch audit."), frappe.PermissionError)
+	if set(frappe.get_roles(user)) & VIEW_ROLES:
+		return
+	# A Department Head (the leave approver set as "Dept Head Email" on an employee) may always see their own team.
+	if _is_dept_head(user):
+		return
+	frappe.throw(_("You do not have permission to view the punch audit."), frappe.PermissionError)
+
+
+def _user_emails(user):
+	emails = {str(user).strip().lower()}
+	ue = frappe.db.get_value("User", user, "email")
+	if ue:
+		emails.add(str(ue).strip().lower())
+	return emails
+
+
+def _is_dept_head(user):
+	"""True when `user` is the Department Head / leave approver (custom_dept_head_email) of at least one active employee."""
+	if not user or user == "Guest":
+		return False
+	return bool(frappe.db.sql("select 1 from `tabEmployee` where status = 'Active' and lower(ifnull(custom_dept_head_email, '')) in %s limit 1",
+	                          [tuple(_user_emails(user))]))
 
 
 def _team_ids(user):
 	"""Employee ids that report to `user` through the Dept Head Email chain (the user's direct reports, then the reports of
 	each of those people, up to 4 levels). Matches on the user's login/email and each employee's user_id / personal /
 	company / preferred email."""
-	emails = {str(user).strip().lower()}
-	ue = frappe.db.get_value("User", user, "email")
-	if ue:
-		emails.add(str(ue).strip().lower())
+	emails = _user_emails(user)
 	seen, level = set(), emails
 	for _depth in range(4):
 		if not level:
@@ -98,13 +115,63 @@ def _team_ids(user):
 
 
 def _scope():
-	"""None = the user sees every employee; otherwise the set of employee ids they may see."""
+	"""None = the user sees every employee; otherwise the set of employee ids they may see.
+	  * TEAM_ONLY_ROLE                       -> own team only (even with an HR / Admin role)
+	  * HR / Admin / MD / System Manager     -> everyone
+	  * anyone else who got in (a Dept Head) -> own team only
+	Computed once per request (the page calls it for every row)."""
 	user = frappe.session.user
 	if not user or user in ("Administrator", "Guest"):
 		return None
-	if TEAM_ONLY_ROLE not in set(frappe.get_roles(user)):
-		return None
-	return _team_ids(user)
+	cached = getattr(frappe.local, "jew_punch_audit_scope", None)
+	if cached and cached[0] == user:
+		return cached[1]
+	roles = set(frappe.get_roles(user))
+	sc = _team_ids(user) if (TEAM_ONLY_ROLE in roles or not (roles & AUDIT_ROLES)) else None
+	frappe.local.jew_punch_audit_scope = (user, sc)
+	return sc
+
+
+def _viewer():
+	"""Who is looking and how much they can see - shown on the page ("Your team · 100 employees")."""
+	sc = _scope()
+	team = 0
+	if sc:
+		team = cint(frappe.db.count("Employee", {"status": "Active", "name": ["in", list(sc)]}))
+	return {"user": frappe.session.user, "scope": "all" if sc is None else "team", "team_size": team}
+
+
+def sync_dept_head_access(emails=None):
+	"""Give every Department Head (custom_dept_head_email on an active employee) the page role TEAM_ONLY_ROLE so they can
+	open the Punch audit page and see their own team. Heads who already see everyone (HR / Admin / MD / System Manager)
+	are left alone - the team-only role would narrow their view. Never removes a role. Returns the users it changed."""
+	if not frappe.db.exists("Role", TEAM_ONLY_ROLE) or not frappe.db.has_column("Employee", "custom_dept_head_email"):
+		return []          # a site without the punch-audit team setup
+	if emails is None:
+		emails = [r[0] for r in frappe.db.sql("select distinct lower(trim(custom_dept_head_email)) from `tabEmployee` where status = 'Active' and ifnull(custom_dept_head_email, '') like '%%@%%'")]
+	changed = []
+	for em in {str(e or "").strip().lower() for e in emails if e}:
+		user = frappe.db.get_value("User", {"name": em}, "name") or frappe.db.get_value("User", {"email": em}, "name")
+		if not user or user in ("Administrator", "Guest") or not cint(frappe.db.get_value("User", user, "enabled")):
+			continue
+		roles = set(frappe.get_roles(user))
+		if TEAM_ONLY_ROLE in roles or roles & AUDIT_ROLES:
+			continue
+		u = frappe.get_doc("User", user)
+		u.append("roles", {"role": TEAM_ONLY_ROLE})
+		u.save(ignore_permissions=True)
+		changed.append(user)
+	return changed
+
+
+def on_employee_update(doc, method=None):
+	"""Employee on_update hook: a newly set Dept Head gets page access straight away. Never blocks the save."""
+	try:
+		em = (doc.get("custom_dept_head_email") or "").strip()
+		if em and "@" in em and doc.get("status") == "Active":
+			sync_dept_head_access([em])
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "JEW HRMS punch audit dept head access sync failed")
 
 
 def _in_scope(emp):
@@ -578,6 +645,7 @@ def get_punch_audit(range=None, from_date=None, to_date=None):
 		live_mode = "off"
 	return {
 		"punches": rows,
+		"viewer": _viewer(),
 		"range": {"from": str(f), "to": str(t)},
 		"generated_at": str(now_datetime()),
 		"face_limit": _face_limit(),
@@ -1260,3 +1328,488 @@ def export_exceptions(range=None, from_date=None, to_date=None, filters=None):
 	widths = [14, 26, 20, 22, 10, 11, 12, 11, 12, 13, 14, 12, 10, 14, 13, 9, 14] + ([9] * (len(head) - 17))
 	xlsx = make_xlsx(data, "Exceptions", column_widths=widths, header_index=0)
 	provide_binary_file("Exceptions %s to %s" % (f, t), "xlsx", xlsx.getvalue())
+
+
+# ----------------------------------------------------------------------------- attendance report (month-wise / year-wise) + leave / half day / on duty
+# Mark IN / Mark OUT, day status, leave, half day and on duty for everyone the viewer may see (a Department Head: own team
+# only, see _scope), for a whole month (day by day) or a whole year (month by month), with an Excel export. Read-only.
+RP_CODES = {"P": "Present", "HD": "Half day", "A": "Absent", "L": "Leave", "OD": "On duty", "H": "Holiday", "WO": "Week off"}
+
+
+def _report_period(period=None, month=None, year=None):
+	"""('month' | 'year', first day, last day, label)."""
+	import calendar
+	from datetime import date
+
+	t = getdate(today())
+	if str(period or "") == "year":
+		y = cint(year) or t.year
+		if y < 2000 or y > t.year + 1:
+			y = t.year
+		return "year", date(y, 1, 1), date(y, 12, 31), str(y)
+	m = re.match(r"^\s*(\d{4})-(\d{1,2})\s*$", str(month or ""))
+	y, mo = (int(m.group(1)), int(m.group(2))) if m else (t.year, t.month)
+	if not (1 <= mo <= 12) or y < 2000:
+		y, mo = t.year, t.month
+	return "month", date(y, mo, 1), date(y, mo, calendar.monthrange(y, mo)[1]), "%s %d" % (calendar.month_name[mo], y)
+
+
+def _blank_tot():
+	return {"p": 0, "hd": 0, "l": 0.0, "od": 0, "a": 0, "nr": 0, "off": 0, "late": 0, "early": 0, "inc": 0, "wd": 0, "md": 0, "mins": 0}
+
+
+def _add_tot(t, c):
+	s = c.get("s")
+	if s == "P":
+		t["p"] += 1
+	elif s == "HD":
+		t["hd"] += 1
+		if c.get("hr") == "Half-day leave":
+			t["l"] += 0.5
+	elif s == "L":
+		t["l"] += 1
+	elif s == "OD":
+		t["od"] += 1
+	elif s == "A":
+		t["a"] += 1
+		t["nr"] += 1 if c.get("nr") else 0
+	elif s in ("H", "WO"):
+		t["off"] += 1
+	t["late"] += 1 if c.get("late") else 0
+	t["early"] += 1 if c.get("early") else 0
+	t["inc"] += 1 if c.get("i") else 0
+	t["wd"] += 1 if c.get("in") else 0
+	t["md"] += 1 if c.get("m") else 0
+	t["mins"] += cint(c.get("m"))
+
+
+def _leave_state(la):
+	if la.docstatus == 1 and la.status == "Approved":
+		return "ok", "Approved"
+	if la.docstatus == 1 and la.status == "Rejected":
+		return "rej", str(la.stage or "Rejected").replace("Department Head", "Dept Head")
+	if la.docstatus == 0 and la.status == "Open":
+		return "pend", LEAVE_STAGE.get(la.stage, "Pending")
+	return None, None
+
+
+def _report(period, f, t, label):
+	"""Everything both report tabs need for [f, t]: employees with totals, day cells (month) or month totals (year), and
+	the leave / half day / on duty entries."""
+	from datetime import datetime, time as dtime
+
+	api = _api()
+	sc = _scope()
+	today_d = getdate(today())
+	days = _days_between(f, t)
+	is_month = period == "month"
+	res = {"period": period, "label": label, "from": str(f), "to": str(t), "today": str(today_d),
+	       "months": sorted({str(d)[:7] for d in days}), "days": [str(d) for d in days] if is_month else [],
+	       "employees": [], "cells": {}, "mo": {}, "records": [], "viewer": _viewer(), "generated_at": str(now_datetime())}
+	if sc is not None and not sc:
+		return res
+	arg = {"f": "%s 00:00:00" % f, "t1": "%s 00:00:00" % add_days(t, 1), "d0": str(f), "d1": str(t)}
+	ef = ""
+	if sc is not None:
+		arg["sc"] = tuple(sc)
+		ef = " and employee in %(sc)s"
+
+	# first IN / last OUT per employee per day (+ the first / last REAL punch, not HR-entered, for late / early)
+	pun = {}
+	for p in frappe.db.sql(
+		"""select employee, date(time) as d,
+		          min(case when log_type = 'IN' then time end) as fin, max(case when log_type = 'OUT' then time end) as lout,
+		          min(case when log_type = 'IN' and ifnull(device_id, '') not in ('', 'Manual (HR)') then time end) as rin,
+		          max(case when log_type = 'OUT' and ifnull(device_id, '') not in ('', 'Manual (HR)') then time end) as rout
+		   from `tabEmployee Checkin` where time >= %(f)s and time < %(t1)s""" + ef + " group by employee, date(time)", arg, as_dict=True):
+		pun[(p.employee, str(p.d))] = p
+
+	att = {}
+	for a in frappe.db.sql("""select employee, attendance_date, status, ifnull(leave_type, '') as leave_type from `tabAttendance`
+	                          where docstatus = 1 and attendance_date between %(d0)s and %(d1)s""" + ef, arg, as_dict=True):
+		att[(a.employee, str(a.attendance_date))] = a
+
+	lv_day, od_day, records = defaultdict(list), defaultdict(list), []
+	for la in frappe.db.sql(
+		"""select name, employee, leave_type, from_date, to_date, half_day, half_day_date, ifnull(custom_half_day_type, '') as htype,
+		          total_leave_days, docstatus, status, ifnull(jew_hrms_approval_status, '') as stage, ifnull(jew_cancel_status, '') as cancel,
+		          description, posting_date, creation
+		   from `tabLeave Application` where docstatus < 2 and from_date <= %(d1)s and to_date >= %(d0)s""" + ef, arg, as_dict=True):
+		k, st = _leave_state(la)
+		if not k:
+			continue
+		a, b = getdate(la.from_date), getdate(la.to_date)
+		hd = (getdate(la.half_day_date) if la.half_day_date else (a if a == b else None)) if cint(la.half_day) else None
+		for d in _days_between(max(a, f), min(b, t)):
+			lv_day[(la.employee, str(d))].append({"t": la.leave_type, "h": 1 if hd == d else 0, "k": k})
+		records.append({"id": la.name, "emp": la.employee, "kind": "Leave", "type": la.leave_type or "Leave", "from": str(a), "to": str(b),
+		                "days": flt(la.total_leave_days), "half": 1 if hd else 0, "hdate": str(hd) if hd else "", "htype": la.htype,
+		                "k": k, "st": st, "cx": 1 if k == "ok" and la.cancel.startswith("Pending") else 0,
+		                "why": re.sub(r"<[^>]+>", " ", str(la.description or "")).strip()[:300], "on": str(getdate(la.posting_date or la.creation))})
+
+	for ar in frappe.db.sql(
+		"""select name, employee, from_date, to_date, reason, explanation, half_day, half_day_date, ifnull(custom_half_day_type, '') as htype,
+		          docstatus, ifnull(jew_od_status, '') as s, creation
+		   from `tabAttendance Request` where docstatus < 2 and from_date <= %(d1)s and to_date >= %(d0)s""" + ef, arg, as_dict=True):
+		if ar.docstatus == 1:
+			k, st = "ok", "Approved"
+		elif ar.s == "Rejected":
+			k, st = "rej", "Rejected"
+		else:
+			k, st = "pend", OD_STAGE.get(ar.s, "Pending approval")
+		a, b = getdate(ar.from_date), getdate(ar.to_date)
+		hd = (getdate(ar.half_day_date) if ar.half_day_date else (a if a == b else None)) if cint(ar.half_day) else None
+		what = ar.reason or "On Duty"
+		for d in _days_between(max(a, f), min(b, t)):
+			od_day[(ar.employee, str(d))].append({"t": what, "h": 1 if hd == d else 0, "k": k})
+		records.append({"id": ar.name, "emp": ar.employee, "kind": "On duty", "type": what, "from": str(a), "to": str(b),
+		                "days": ((b - a).days + 1) - (0.5 if hd else 0), "half": 1 if hd else 0, "hdate": str(hd) if hd else "", "htype": ar.htype,
+		                "k": k, "st": st, "cx": 0, "why": str(ar.explanation or "").strip()[:300], "on": str(getdate(ar.creation))})
+
+	reg_hd = {(r[0], str(r[1])) for r in frappe.db.sql(
+		"""select employee, attendance_date from `tabJEW Attendance Regularization`
+		   where status = 'Marked Half Day' and attendance_date between %(d0)s and %(d1)s""" + ef, arg)}
+
+	hol = defaultdict(dict)
+	for h in frappe.db.sql("select parent, holiday_date, weekly_off from `tabHoliday` where parenttype = 'Holiday List' and holiday_date between %s and %s", (str(f), str(t))):
+		hol[h[0]][str(getdate(h[1]))] = "WO" if cint(h[2]) else "H"
+	company_hl = dict(frappe.db.sql("select name, default_holiday_list from `tabCompany`"))
+
+	# Attendance is only tracked from an employee's first punch / attendance record: before that a day with nothing on it is
+	# "not tracked yet", not "absent" (capture started mid-2026, and some people joined the app later).
+	since = {}
+	for r in frappe.db.sql(
+		"""select employee, min(d) from (
+		       select employee, min(date(time)) as d from `tabEmployee Checkin` where 1 = 1""" + ef + """ group by employee
+		       union all
+		       select employee, min(attendance_date) as d from `tabAttendance` where docstatus = 1""" + ef + """ group by employee
+		   ) x group by employee""", arg):
+		if r[1]:
+			since[r[0]] = getdate(r[1])
+
+	has_data = {k[0] for k in pun} | {k[0] for k in att} | {r["emp"] for r in records}
+	arg["hd"] = tuple(has_data) or ("",)
+	emps = frappe.db.sql(
+		"""select name, employee_name, department, designation, company, holiday_list, default_shift, date_of_joining, relieving_date, status,
+		          ifnull(user_id, '') as user_id
+		   from `tabEmployee`
+		   where (status = 'Active' or ifnull(relieving_date, '2000-01-01') >= %(d0)s or name in %(hd)s)"""
+		+ (" and name in %(sc)s" if sc is not None else "") + " order by employee_name", arg, as_dict=True)
+
+	pols = {}
+
+	def policy_for(e):
+		key = e.default_shift or ""
+		if key not in pols:
+			try:
+				pols[key] = api._get_active_policy(employee=e.name, shift=e.default_shift or None)
+			except Exception:
+				pols[key] = None
+		return pols[key]
+
+	keep = set()
+	for e in emps:
+		# HR / Admin view: skip people who neither use the app nor have any record in the period (drivers, labour rolls...).
+		# A Department Head always sees their whole team.
+		if sc is None and not (e.user_id or e.name in has_data):
+			continue
+		keep.add(e.name)
+		pol = policy_for(e)
+		start = end = None
+		grace_out = 0
+		if pol:
+			start = api._parse_time(pol.shift_start_time, dtime(9, 30))
+			end = api._parse_time(pol.shift_end_time, dtime(18, 30))
+			grace_out = int(pol.early_going_grace_minutes or 0)
+		holmap = hol.get(e.holiday_list or company_hl.get(e.company), {})
+		joined = getdate(e.date_of_joining) if e.date_of_joining else None
+		left = getdate(e.relieving_date) if e.relieving_date else None
+		tracked = since.get(e.name)
+		tot, per_m, ecells = _blank_tot(), {}, {}
+		for d in days:
+			if (joined and d < joined) or (left and d > left):
+				continue
+			ds = str(d)
+			key = (e.name, ds)
+			c = {}
+			p = pun.get(key)
+			off = holmap.get(ds)
+			if p:
+				if p.fin:
+					c["in"] = _hhmm(p.fin)
+				if p.lout:
+					c["out"] = _hhmm(p.lout)
+				if p.fin and p.lout and get_datetime(p.lout) > get_datetime(p.fin):
+					c["m"] = int((get_datetime(p.lout) - get_datetime(p.fin)).total_seconds() // 60)
+				# no late / early on a holiday or week off the employee chose to work
+				if start and p.rin and not off:
+					mins = (get_datetime(p.rin) - datetime.combine(d, start)).total_seconds() / 60.0
+					if mins > api.LATE_ARRIVAL_GRACE_MINUTES:
+						c["late"] = int(mins)
+				if end and p.rout and not off:
+					mins = (datetime.combine(d, end) - get_datetime(p.rout)).total_seconds() / 60.0
+					if mins > grace_out:
+						c["early"] = int(mins)
+				if p.fin and not p.lout and d < today_d:
+					c["i"] = 1
+			a = att.get(key)
+			astat = a.status if a else None
+			lv_all = lv_day.get(key, [])
+			lv = [x for x in lv_all if x["k"] == "ok"]
+			od = [x for x in od_day.get(key, []) if x["k"] == "ok"]
+			if not astat and off and not p and not od:
+				code = off
+			elif astat == "On Leave" or any(not x["h"] for x in lv):
+				code = "L"
+			elif astat == "Half Day" or any(x["h"] for x in lv):
+				code = "HD"
+			elif od:
+				code = "OD"
+			elif astat in ("Present", "Work From Home"):
+				code = "P"
+			elif astat == "Absent":
+				code = "A"
+			elif p:
+				code = "P"
+			elif off:
+				code = off
+			elif d < today_d and tracked and d >= tracked:
+				code = "A"
+				c["nr"] = 1          # no punch, no attendance, no leave, no on duty
+			else:
+				code = ""
+			if code:
+				c["s"] = code
+			lt = (a.leave_type if a and a.leave_type else "") or (lv[0]["t"] if lv else "")
+			if code in ("L", "HD") and lt:
+				c["lt"] = lt
+			if code == "HD":
+				c["hr"] = "Half-day leave" if (any(x["h"] for x in lv) or (a and a.leave_type)) else ("Late arrival" if key in reg_hd else "Half day")
+			if od:
+				c["od"] = od[0]["t"] + (" (half day)" if od[0]["h"] else "")
+			lp = [x for x in lv_all if x["k"] == "pend"]
+			if lp:
+				c["lp"] = lp[0]["t"]
+			if any(x["k"] == "pend" for x in od_day.get(key, [])):
+				c["odp"] = 1
+			if not c:
+				continue
+			if is_month:
+				ecells[ds] = c
+			if d <= today_d:
+				_add_tot(tot, c)
+				_add_tot(per_m.setdefault(ds[:7], _blank_tot()), c)
+		res["employees"].append({"id": e.name, "name": str(e.employee_name or e.name).strip(), "dept": e.department or "", "desig": e.designation or "",
+		                         "login": 1 if e.user_id else 0, "left": str(left) if e.status != "Active" and left else "",
+		                         "since": str(tracked) if tracked else "", "c": tot})
+		if is_month:
+			res["cells"][e.name] = ecells
+		else:
+			res["mo"][e.name] = per_m
+
+	# Half days that are not a half-day leave (late arrival / short hours marked by the system or HR)
+	for (emp, ds), a in att.items():
+		if a.status != "Half Day" or emp not in keep or a.leave_type or any(x["h"] and x["k"] == "ok" for x in lv_day.get((emp, ds), [])):
+			continue
+		p = pun.get((emp, ds))
+		bits = ["IN " + _hhmm(p.fin) if p and p.fin else "", "OUT " + _hhmm(p.lout) if p and p.lout else ""]
+		records.append({"id": "HD:%s:%s" % (emp, ds), "emp": emp, "kind": "Half day", "type": "Late arrival" if (emp, ds) in reg_hd else "Half day (attendance)",
+		                "from": ds, "to": ds, "days": 0.5, "half": 1, "hdate": ds, "htype": "", "k": "ok", "st": "Marked", "cx": 0,
+		                "why": " · ".join(x for x in bits if x), "on": ds})
+	res["records"] = sorted((r for r in records if r["emp"] in keep), key=lambda r: (r["from"], r["id"]), reverse=True)
+	return res
+
+
+@frappe.whitelist()
+def get_attendance_report(period=None, month=None, year=None):
+	"""Month-wise (day by day) or year-wise (month by month) attendance: Mark IN / OUT, status, leave, half day, on duty."""
+	_require_access()
+	per, f, t, label = _report_period(period, month, year)
+	return _report(per, f, t, label)
+
+
+def _xlsx_book(sheets):
+	"""[(title, rows, widths, freeze)] -> .xlsx bytes. Row 1 of each sheet is a bold, frozen, filterable header."""
+	from datetime import date
+
+	import openpyxl
+	from openpyxl.styles import Alignment, Font, PatternFill
+	from openpyxl.utils import get_column_letter
+	from frappe.utils.xlsxutils import ILLEGAL_CHARACTERS_RE
+
+	wb = openpyxl.Workbook()
+	wb.remove(wb.active)
+	head_font, head_fill = Font(bold=True, color="FFFFFF"), PatternFill("solid", fgColor="4F46E5")
+	for title, rows, widths, freeze in sheets:
+		ws = wb.create_sheet(re.sub(r"[\\/*?:\[\]]", " ", title)[:31])
+		for r in rows:
+			ws.append([ILLEGAL_CHARACTERS_RE.sub("", v) if isinstance(v, str) else v for v in r])
+			for i, v in enumerate(r):
+				if isinstance(v, date):
+					ws.cell(row=ws.max_row, column=i + 1).number_format = "DD-MM-YYYY"
+		for cell in ws[1]:
+			cell.font, cell.fill = head_font, head_fill
+			cell.alignment = Alignment(vertical="center", wrap_text=True)
+		for i, w in enumerate(widths or []):
+			ws.column_dimensions[get_column_letter(i + 1)].width = w
+		ws.freeze_panes = freeze or "A2"
+		if ws.max_row > 1:
+			ws.auto_filter.ref = ws.dimensions
+	out = io.BytesIO()
+	wb.save(out)
+	return out.getvalue()
+
+
+def _hrs(mins):
+	return round(cint(mins) / 60.0, 2) if mins else ""
+
+
+def _pdays(c):
+	return c["p"] + c["od"] + c["hd"] * 0.5
+
+
+def _cell_note(c):
+	bits = []
+	if c.get("lt"):
+		bits.append(c["lt"])
+	if c.get("s") == "HD" and c.get("hr"):
+		bits.append(c["hr"])
+	if c.get("od"):
+		bits.append(c["od"])
+	if c.get("nr"):
+		bits.append("No punch / no leave / no on duty")
+	if c.get("i"):
+		bits.append("IN without OUT")
+	if c.get("lp"):
+		bits.append("Leave applied (%s) - pending" % c["lp"])
+	if c.get("odp"):
+		bits.append("On duty requested - pending")
+	return " · ".join(bits)
+
+
+RP_SUM_HEAD = ["Employee ID", "Employee", "Department", "Designation", "Tracked from", "Present", "Half day", "On duty", "Leave days", "Absent",
+               "of which no record", "Holiday / week off", "Present days (P + OD + ½ HD)", "Late days", "Early going days", "IN without OUT",
+               "Total hours", "Avg hours / day"]
+RP_SUM_W = [14, 28, 20, 22, 12, 9, 9, 9, 10, 9, 11, 11, 14, 9, 11, 11, 11, 11]
+LV_HEAD = ["Type", "Employee ID", "Employee", "Department", "Leave / duty type", "From", "To", "Days", "Half day", "Half",
+           "Status", "Reason / details", "Applied on", "Reference"]
+LV_W = [11, 14, 28, 20, 20, 12, 12, 7, 10, 12, 26, 44, 12, 22]
+
+
+def _sum_row(e, c):
+	return [e["id"], e["name"], e["dept"], e["desig"], getdate(e["since"]) if e.get("since") else "No record yet",
+	        c["p"], c["hd"], c["od"], c["l"], c["a"], c["nr"], c["off"], _pdays(c),
+	        c["late"], c["early"], c["inc"], _hrs(c["mins"]), round(c["mins"] / 60.0 / c["md"], 2) if c["md"] else ""]
+
+
+def _lv_rows(recs, byid):
+	rows = [LV_HEAD]
+	for r in recs:
+		e = byid.get(r["emp"]) or {"name": r["emp"], "dept": ""}
+		rows.append([r["kind"], r["emp"], e["name"], e["dept"], r["type"], getdate(r["from"]), getdate(r["to"]), r["days"],
+		             (getdate(r["hdate"]) if r["hdate"] else "Yes") if r["half"] else "", r["htype"],
+		             r["st"] + (" (cancellation requested)" if r["cx"] else ""), r["why"], getdate(r["on"]) if r["on"] else "",
+		             "" if r["id"].startswith("HD:") else r["id"]])
+	return rows
+
+
+def _rec_match(r, chip, st):
+	if chip == "leave" and r["kind"] != "Leave":
+		return False
+	if chip == "od" and r["kind"] != "On duty":
+		return False
+	if chip == "half" and not r["half"]:
+		return False
+	if st in ("ok", "pend", "rej") and r["k"] != st:
+		return False
+	return True
+
+
+@frappe.whitelist()
+def export_attendance_report(period=None, month=None, year=None, view=None, filters=None):
+	"""Excel workbook. view="att": summary + Mark IN / OUT (+ register grid) for a month, or year summary + month-wise for a
+	year, plus the leave / on duty sheet. view="lv": the leave, half day and on duty list (with the page's chip / status filter)."""
+	_require_access()
+	per, f, t, label = _report_period(period, month, year)
+	res = _report(per, f, t, label)
+	try:
+		fl = json.loads(filters) if filters else {}
+	except Exception:
+		fl = {}
+	q, dept, only = str(fl.get("q") or "").strip().lower(), fl.get("dept") or "", fl.get("emp") or ""
+	emps = sorted((e for e in res["employees"]
+	               if (not q or q in e["name"].lower() or q in e["id"].lower()) and (not dept or e["dept"] == dept) and (not only or e["id"] == only)),
+	              key=lambda e: e["name"].lower())
+	byid = {e["id"]: e for e in emps}
+	recs = [r for r in res["records"] if r["emp"] in byid]
+	lv_sheet = ("Leave & On duty", _lv_rows(recs, byid), LV_W, "D2")
+
+	if view == "lv":
+		shown = [r for r in recs if _rec_match(r, fl.get("chip"), fl.get("st"))]
+		summ = [["Employee ID", "Employee", "Department", "Leave days (approved)", "Leave days (pending)", "Half days (approved)",
+		         "On duty days (approved)", "Pending requests", "Rejected"]]
+		for e in emps:
+			mine = [r for r in recs if r["emp"] == e["id"]]
+			if not mine:
+				continue
+			summ.append([e["id"], e["name"], e["dept"],
+			             sum(r["days"] for r in mine if r["kind"] == "Leave" and r["k"] == "ok"),
+			             sum(r["days"] for r in mine if r["kind"] == "Leave" and r["k"] == "pend"),
+			             sum(1 for r in mine if r["half"] and r["k"] == "ok"),
+			             sum(r["days"] for r in mine if r["kind"] == "On duty" and r["k"] == "ok"),
+			             sum(1 for r in mine if r["k"] == "pend"), sum(1 for r in mine if r["k"] == "rej")])
+		sheets = [("Leave & On duty", _lv_rows(shown, byid), LV_W, "D2"), ("Employee summary", summ, [14, 28, 20, 14, 14, 14, 14, 12, 10], "C2")]
+		name = "Leave half day on duty %s" % label
+	elif per == "month":
+		summary = [RP_SUM_HEAD] + [_sum_row(e, e["c"]) for e in emps]
+		inout = [["Date", "Day", "Employee ID", "Employee", "Department", "Status", "Mark IN", "Mark OUT", "Hours", "Late (min)", "Early going (min)", "Remarks"]]
+		grid_head = ["Employee ID", "Employee", "Department"] + [getdate(d).strftime("%d %a") for d in res["days"]] + ["P", "HD", "OD", "Leave", "A", "Off", "Present days"]
+		grid = [grid_head]
+		for e in emps:
+			cells = res["cells"].get(e["id"], {})
+			line = [e["id"], e["name"], e["dept"]]
+			for ds in res["days"]:
+				c = cells.get(ds)
+				if not c:
+					line.append("")
+					continue
+				line.append(((c.get("s") or "") + (" %s-%s" % (c.get("in") or "--", c.get("out") or "--") if c.get("in") or c.get("out") else "")).strip())
+				if ds > res["today"] and not c.get("s"):
+					continue
+				dd = getdate(ds)
+				inout.append([dd, dd.strftime("%a"), e["id"], e["name"], e["dept"], RP_CODES.get(c.get("s"), ""), c.get("in") or "", c.get("out") or "",
+				              _hrs(c.get("m")), c.get("late") or "", c.get("early") or "", _cell_note(c)])
+			ct = e["c"]
+			grid.append(line + [ct["p"], ct["hd"], ct["od"], ct["l"], ct["a"], ct["off"], _pdays(ct)])
+		sheets = [("Summary", summary, RP_SUM_W, "C2"),
+		          ("Mark In-Out", inout, [12, 6, 14, 28, 20, 10, 9, 9, 7, 9, 11, 46], "E2"),
+		          ("Register", grid, [14, 28, 20] + [15] * len(res["days"]) + [6, 6, 6, 7, 6, 6, 10], "D2"),
+		          lv_sheet]
+		name = "Attendance report %s" % label
+	else:
+		summary = [RP_SUM_HEAD] + [_sum_row(e, e["c"]) for e in emps]
+		cur = res["today"][:7]
+		months = [m for m in res["months"] if m <= cur]
+		mw = [["Employee ID", "Employee", "Department", "Month", "Present", "Half day", "On duty", "Leave days", "Absent", "Holiday / week off",
+		       "Present days", "Late days", "Early going days", "Total hours"]]
+		pg = [["Employee ID", "Employee", "Department"] + [getdate(m + "-01").strftime("%b %Y") for m in months] + ["Total"]]
+		for e in emps:
+			mo = res["mo"].get(e["id"], {})
+			line = [e["id"], e["name"], e["dept"]]
+			for m in months:
+				c = mo.get(m)
+				if c and not (c["p"] or c["hd"] or c["od"] or c["l"] or c["a"]):
+					c = None              # nothing but holidays / week offs (before the employee's first record)
+				line.append(_pdays(c) if c else "")
+				if c:
+					mw.append([e["id"], e["name"], e["dept"], getdate(m + "-01").strftime("%b %Y"), c["p"], c["hd"], c["od"], c["l"], c["a"], c["off"],
+					           _pdays(c), c["late"], c["early"], _hrs(c["mins"])])
+			pg.append(line + [_pdays(e["c"])])
+		sheets = [("Year summary", summary, RP_SUM_W, "C2"),
+		          ("Month-wise", mw, [14, 28, 20, 10, 9, 9, 9, 10, 9, 11, 11, 9, 11, 11], "E2"),
+		          ("Present days by month", pg, [14, 28, 20] + [10] * len(months) + [10], "D2"),
+		          lv_sheet]
+		name = "Attendance report %s" % label
+	if only and byid:
+		name += " - " + byid[only]["name"]
+	provide_binary_file(name, "xlsx", _xlsx_book(sheets))
