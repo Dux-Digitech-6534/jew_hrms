@@ -631,11 +631,77 @@ def _punch_rows(rng, from_date, to_date):
 	return f, t, out
 
 
+def _emp_location_map():
+	"""employee -> sorted names of the active locations assigned to them (only employees the viewer may see).
+	Feeds the Location filter on the employee-based tabs (Not punched, Exceptions, Attendance report, Leave)."""
+	sc = _scope()
+	if sc is not None and not sc:
+		return {}
+	rows = frappe.db.sql(
+		"""select a.employee, trim(l.location_name) as loc from `tabJEW Employee Location Assignment` a
+		join `tabJEW Attendance Location` l on l.name = a.location
+		join `tabEmployee` e on e.name = a.employee and e.status = 'Active'
+		where a.is_active = 1 and l.is_active = 1 and ifnull(trim(l.location_name), '') != ''""",
+		as_dict=True,
+	)
+	out = defaultdict(set)
+	for r in rows:
+		if sc is None or r.employee in sc:
+			out[r.employee].add(r.loc)
+	return {k: sorted(v) for k, v in out.items()}
+
+
+def _location_options(emp_locs):
+	"""Names offered by the page's searchable Location filter: every active attendance location for HR / Admin,
+	only the team's sites for a Dept Head. The page adds any location seen on a punch in the range."""
+	if _scope() is None:
+		names = {r[0] for r in frappe.db.sql(
+			"select distinct trim(location_name) from `tabJEW Attendance Location` where is_active = 1 and ifnull(trim(location_name), '') != ''")}
+	else:
+		names = {n for v in emp_locs.values() for n in v}
+	return sorted((n for n in names if n), key=lambda s: s.lower())
+
+
+def _emps_at_location(loc):
+	"""Employee ids (in the viewer's scope) with an active assignment to the location named `loc`."""
+	return {e for e, v in _emp_location_map().items() if loc in v}
+
+
+def _emp_project_map():
+	"""active employee -> title of their Project (Employee.custom_project), only employees the viewer may see.
+	Feeds the page's Project filter on every tab."""
+	if not frappe.get_meta("Employee").has_field("custom_project"):
+		return {}
+	sc = _scope()
+	if sc is not None and not sc:
+		return {}
+	rows = frappe.db.sql(
+		"""select e.name as emp, coalesce(nullif(trim(p.project_name), ''), p.name) as proj from `tabEmployee` e
+		join `tabProject` p on p.name = e.custom_project where e.status = 'Active'""",
+		as_dict=True,
+	)
+	return {r.emp: r.proj for r in rows if sc is None or r.emp in sc}
+
+
+def _emps_in_project(proj):
+	"""Employee ids (in the viewer's scope) whose Project title is `proj`."""
+	return {e for e, p in _emp_project_map().items() if p == proj}
+
+
+def _emp_filter_sets(fl):
+	"""(location set, project set) for the employee-based exports; None = that filter is off."""
+	at = _emps_at_location(fl["loc"]) if fl.get("loc") else None
+	pj = _emps_in_project(fl["proj"]) if fl.get("proj") else None
+	return at, pj
+
+
 @frappe.whitelist()
 def get_punch_audit(range=None, from_date=None, to_date=None):
 	"""All punches in the range with their evidence + computed flags. The page filters client-side."""
 	_require_access()
 	f, t, rows = _punch_rows(range, from_date, to_date)
+	emp_locs = _emp_location_map()
+	emp_proj = _emp_project_map()
 	since = frappe.db.sql("select min(punch_time) from `tabJEW Punch Audit`")[0][0]
 	try:
 		from jew_hrms_mobile import liveness_service
@@ -652,6 +718,10 @@ def get_punch_audit(range=None, from_date=None, to_date=None):
 		"retention_days": _retention_days(),
 		"liveness_mode": live_mode,
 		"capture_since": str(get_datetime(since).date()) if since else None,
+		"emp_locs": emp_locs,
+		"locations": _location_options(emp_locs),
+		"emp_proj": emp_proj,
+		"projects": sorted(set(emp_proj.values()), key=lambda s: s.lower()),
 	}
 
 
@@ -778,6 +848,7 @@ def _apply_filters(rows, f):
 	q = str(f.get("q") or "").strip().lower()
 	dv = str(f.get("dev") or "").strip().lower()
 	kpi = f.get("kpi")
+	in_proj = _emps_in_project(f["proj"]) if f.get("proj") else None
 	out = []
 	for r in rows:
 		if q and not (q in str(r["name"] or "").lower() or q in str(r["employee"] or "").lower()):
@@ -785,6 +856,8 @@ def _apply_filters(rows, f):
 		if f.get("dept") and r["dept"] != f["dept"]:
 			continue
 		if f.get("loc") and (r["loc"] or "") != f["loc"]:
+			continue
+		if in_proj is not None and r["employee"] not in in_proj:
 			continue
 		if f.get("type") and r["type"] != f["type"]:
 			continue
@@ -992,11 +1065,16 @@ def get_not_punched(range=None, from_date=None, to_date=None):
 def _np_filter(rows, f):
 	f = f or {}
 	q = str(f.get("q") or "").strip().lower()
+	at, pj = _emp_filter_sets(f)
 	out = []
 	for r in rows:
 		if q and not (q in str(r["name"] or "").lower() or q in str(r["id"] or "").lower()):
 			continue
 		if f.get("dept") and r["dept"] != f["dept"]:
+			continue
+		if at is not None and r["id"] not in at:
+			continue
+		if pj is not None and r["id"] not in pj:
 			continue
 		if cint(f.get("only_login")) and not r["login"]:
 			continue
@@ -1306,8 +1384,10 @@ def export_exceptions(range=None, from_date=None, to_date=None, filters=None):
 		fl = {}
 	res = _exceptions(f, t)
 	q = str(fl.get("q") or "").strip().lower()
+	at, pj = _emp_filter_sets(fl)
 	rows = [e for e in res["employees"]
-	        if (not q or q in e["name"].lower() or q in e["id"].lower()) and (not fl.get("dept") or e["dept"] == fl["dept"]) and _ex_match(e["c"], fl.get("chip"))]
+	        if (not q or q in e["name"].lower() or q in e["id"].lower()) and (not fl.get("dept") or e["dept"] == fl["dept"])
+	        and (at is None or e["id"] in at) and (pj is None or e["id"] in pj) and _ex_match(e["c"], fl.get("chip"))]
 	rows.sort(key=lambda e: e["name"].lower())
 	grid = len(res["days"]) <= 31
 	head = ["Employee ID", "Employee", "Department", "Designation", "App login", "Late (system)", "Late (punch time)", "Early (system)", "Early (punch time)",
@@ -1737,8 +1817,10 @@ def export_attendance_report(period=None, month=None, year=None, view=None, filt
 	except Exception:
 		fl = {}
 	q, dept, only = str(fl.get("q") or "").strip().lower(), fl.get("dept") or "", fl.get("emp") or ""
+	at, pj = _emp_filter_sets(fl)
 	emps = sorted((e for e in res["employees"]
-	               if (not q or q in e["name"].lower() or q in e["id"].lower()) and (not dept or e["dept"] == dept) and (not only or e["id"] == only)),
+	               if (not q or q in e["name"].lower() or q in e["id"].lower()) and (not dept or e["dept"] == dept) and (not only or e["id"] == only)
+	               and (at is None or e["id"] in at) and (pj is None or e["id"] in pj)),
 	              key=lambda e: e["name"].lower())
 	byid = {e["id"]: e for e in emps}
 	recs = [r for r in res["records"] if r["emp"] in byid]
