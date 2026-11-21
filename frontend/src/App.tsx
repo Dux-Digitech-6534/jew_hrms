@@ -973,24 +973,43 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange, open
     return () => window.clearInterval(timer);
   }, []);
 
-  const requestPosition = (highAccuracy: boolean, timeout: number) => new Promise<GeolocationCoordinates>((resolve, reject) => {
-    navigator.geolocation.getCurrentPosition((pos) => resolve(pos.coords), (err) => reject(err), { enableHighAccuracy: highAccuracy, timeout, maximumAge: 30000 });
+  // GPS: the first fix a phone hands back is often a coarse Wi-Fi / mobile-tower estimate (hundreds of metres to a few km
+  // off) or a cached one - that is why one or two people standing at the site got "outside geofence" while the person
+  // next to them passed. So: high accuracy, no cached fix, keep listening for up to GPS_WAIT_MS and keep the most
+  // accurate fix, stopping early once it is GOOD_ACC_M or better. Coarse network location is used only when GPS gives nothing.
+  const GOOD_ACC_M = 50, OK_ACC_M = 100, GPS_WAIT_MS = 12000;
+  const bestFix = (highAccuracy: boolean, waitMs: number) => new Promise<GeolocationCoordinates>((resolve, reject) => {
+    let best: GeolocationCoordinates | null = null, done = false, watchId = -1;
+    const finish = (err?: any) => {
+      if (done) return;
+      done = true; window.clearTimeout(timer);
+      try { navigator.geolocation.clearWatch(watchId); } catch { /* ignore */ }
+      if (best) resolve(best); else reject(err || { code: 3 });
+    };
+    const timer = window.setTimeout(() => finish(), waitMs);
+    watchId = navigator.geolocation.watchPosition((pos) => {
+      if (!best || pos.coords.accuracy < best.accuracy) best = pos.coords;
+      if (pos.coords.accuracy <= GOOD_ACC_M) finish();
+    }, (err) => { if (err && err.code === 1) finish(err); /* timeout / unavailable: keep listening until waitMs */ },
+    { enableHighAccuracy: highAccuracy, timeout: waitMs, maximumAge: 0 });
   });
   const getCurrentLocation = async (): Promise<GeolocationCoordinates> => {
     if (!navigator.geolocation) throw new Error("Location is not available on this device.");
-    try { return await requestPosition(true, 15000); }
+    try { return await bestFix(true, GPS_WAIT_MS); }
     catch (err: any) {
       if (err && err.code === 1) throw new Error("Location is turned off for this app. Please enable location/GPS and allow access, then try again.");
-      try { return await requestPosition(false, 20000); }
+      try { return await bestFix(false, 15000); }
       catch { throw new Error("Could not get your location. Please turn on GPS/location and try again in an open area."); }
     }
   };
   // The GPS fix is the slowest part on a cold phone, so it starts as soon as Mark In / Mark Out is possible (screen opened) and the
-  // punch re-uses it while it is fresh - the verify screen then never waits for GPS after the photo.
+  // punch re-uses it while it is fresh - unless that early fix was weak, then a new one is taken and the better of the two is used.
   const prewarmFresh = () => { const pre = prewarmRef.current; return pre && Date.now() - pre.at < 45000 ? pre : null; };
   const startLocation = (): Promise<GeolocationCoordinates> => {
     const pre = prewarmFresh();
-    return pre ? pre.p.catch(() => getCurrentLocation()) : getCurrentLocation();
+    if (!pre) return getCurrentLocation();
+    return pre.p.then((c) => (c.accuracy <= OK_ACC_M ? c : getCurrentLocation().then((n) => (n.accuracy < c.accuracy ? n : c)).catch(() => c)))
+      .catch(() => getCurrentLocation());
   };
   useEffect(() => {
     if (verifyType || !navigator.geolocation) return;
@@ -1108,7 +1127,26 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange, open
       setGpsStatus(currentCoords ? "Captured" : "Skipped"); setFaceStatus("Verifying face");
       const firstTry = triesRef.current === 1;
       const clientTimings = JSON.stringify({ v: 1, try: triesRef.current, cam: firstTry ? camMsRef.current : 0, cap: capMs, gps: gpsMs, pw: usedPre ? 1 : 0, lead: Math.round(performance.now() - (firstTry ? tapRef.current : tConfirm)) });
-      const result = await call(API.markAttendance, { type: verifyType, face_image: capturedImage, latitude: currentCoords?.latitude, longitude: currentCoords?.longitude, accuracy: currentCoords?.accuracy, timestamp: new Date().toISOString(), device_id: getDeviceId(), client_timings: clientTimings, ...(liveFrames ? { liveness_challenge: challenge.token, liveness_frames: liveFrames } : {}) });
+      const send = (c: GeolocationCoordinates | null) => call(API.markAttendance, { type: verifyType, face_image: capturedImage, latitude: c?.latitude, longitude: c?.longitude, accuracy: c?.accuracy, timestamp: new Date().toISOString(), device_id: getDeviceId(), client_timings: clientTimings, ...(liveFrames ? { liveness_challenge: challenge.token, liveness_frames: liveFrames } : {}) });
+      let result: any;
+      try { result = await send(currentCoords); }
+      catch (err: any) {
+        // "Outside geofence" on a weak fix: take one fresh, longer GPS fix and send the same photo again before giving up.
+        const outside = /geofence|outside .*location/i.test(String(err?.message || ""));
+        if (!outside || optionalLoc || !currentCoords || currentCoords.accuracy <= GOOD_ACC_M) throw err;
+        setGpsStatus("Improving GPS...");
+        const better = liveFrames ? null : await bestFix(true, 15000).catch(() => null);
+        if (better && better.accuracy < currentCoords.accuracy) {
+          setCoords(better);
+          try { result = await send(better); }
+          catch (err2: any) {
+            if (/geofence|outside .*location/i.test(String(err2?.message || "")) && better.accuracy > OK_ACC_M) throw new Error("Outside assigned geofence. Your GPS signal is weak (about " + Math.round(better.accuracy) + " m). Step into an open area, wait a few seconds and try again.");
+            throw err2;
+          }
+        } else if (currentCoords.accuracy > OK_ACC_M) {
+          throw new Error("Outside assigned geofence. Your GPS signal is weak (about " + Math.round(currentCoords.accuracy) + " m). Step into an open area, wait a few seconds and try again.");
+        } else throw err;
+      }
       // The punch is saved server-side at this point: a hiccup refreshing the dashboard
       // must not leave the user stuck on the verify screen.
       if (result?.attendance_status) setStatus(result.attendance_status);

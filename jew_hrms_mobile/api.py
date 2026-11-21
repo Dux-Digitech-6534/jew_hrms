@@ -126,10 +126,23 @@ def _attendance_logger():
 	return frappe.logger("jew_hrms_mobile.attendance", allow_site=True)
 
 
+# Punch attempts the server turned away. The site logger keeps only ERROR and above, so these are written at that level to
+# their own file - sites/<site>/logs/jew_hrms_mobile.punch_rejects.log - and HR / IT can see who was refused, where
+# (latitude, longitude, GPS accuracy, nearest site, distance) and why.
+PUNCH_REJECT_STAGES = {"geofence_failed", "location_not_assigned", "face_template_missing", "face_verification_failed",
+	"face_image_missing", "liveness_failed", "attendance_sequence_blocked", "inactive_employee", "employee_resolution_failed"}
+
+
 def _log_attendance_debug(stage, context):
 	safe = dict(context or {})
 	safe["stage"] = stage
 	_attendance_logger().info(json.dumps(safe, default=str, sort_keys=True))
+	if stage in PUNCH_REJECT_STAGES:
+		try:
+			safe.pop("exception", None)
+			frappe.logger("jew_hrms_mobile.punch_rejects", allow_site=True).error(json.dumps(safe, default=str, sort_keys=True))
+		except Exception:
+			pass
 
 
 def _roles(user=None):
