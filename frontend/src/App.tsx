@@ -1027,7 +1027,12 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange, open
     setCameraReady(false);
     onCameraActiveChange?.(false);
   };
+  // Each punch attempt gets a run number. Closing the verify screen or starting a new attempt moves it on, so an older
+  // attempt that is still waiting for GPS is dropped instead of being sent alongside the new one (that sent two
+  // Mark In requests together and saved two IN punches for the same day).
+  const runRef = useRef(0);
   const closeVerify = () => {
+    runRef.current += 1;
     stopVerifyCamera(); autoSubmitRef.current = false; triesRef.current = 0; setVerifyType(null); setSubmitting(false);
     setCoords(null); setGpsStatus("Captured on submit"); setCameraStatus("Starting camera..."); setFaceStatus("Looking for face...");
   };
@@ -1089,6 +1094,8 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange, open
   const confirmVerify = async () => {
     if (!verifyType || submitting) return;
     setSubmitting(true);
+    const myRun = ++runRef.current;
+    const cancelled = () => runRef.current !== myRun;
     // GPS runs in parallel with the photo (or was already pre-warmed) on every site - the punch never waits for it afterwards.
     const liveOn = isLiveScanSite();
     triesRef.current += 1;
@@ -1122,6 +1129,7 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange, open
       const currentCoords: GeolocationCoordinates | null = optionalLoc
         ? await Promise.race([locPromise.catch(() => null), new Promise<null>((r) => window.setTimeout(() => r(null), 3000))])
         : await locPromise;
+      if (cancelled()) return;   // screen closed or a newer attempt started while waiting for GPS - never send this one
       const gpsMs = Math.round(performance.now() - tGps);
       if (currentCoords) setCoords(currentCoords);
       setGpsStatus(currentCoords ? "Captured" : "Skipped"); setFaceStatus("Verifying face");
@@ -1136,6 +1144,7 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange, open
         if (!outside || optionalLoc || !currentCoords || currentCoords.accuracy <= GOOD_ACC_M) throw err;
         setGpsStatus("Improving GPS...");
         const better = liveFrames ? null : await bestFix(true, 15000).catch(() => null);
+        if (cancelled()) return;
         if (better && better.accuracy < currentCoords.accuracy) {
           setCoords(better);
           try { result = await send(better); }
@@ -1188,7 +1197,7 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange, open
       } else {
         flash("Attendance failed", cleanErrorMessage(error));
       }
-    } finally { setSubmitting(false); }
+    } finally { if (!cancelled()) setSubmitting(false); }   // a dropped attempt must not unlock the newer one's button
   };
 
   const faceReady = status?.face_registered ?? status?.face_status?.registered ?? true;

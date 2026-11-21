@@ -130,7 +130,8 @@ def _attendance_logger():
 # their own file - sites/<site>/logs/jew_hrms_mobile.punch_rejects.log - and HR / IT can see who was refused, where
 # (latitude, longitude, GPS accuracy, nearest site, distance) and why.
 PUNCH_REJECT_STAGES = {"geofence_failed", "location_not_assigned", "face_template_missing", "face_verification_failed",
-	"face_image_missing", "liveness_failed", "attendance_sequence_blocked", "inactive_employee", "employee_resolution_failed"}
+	"face_image_missing", "liveness_failed", "attendance_sequence_blocked", "inactive_employee", "employee_resolution_failed",
+	"duplicate_checkin_blocked"}
 
 
 def _log_attendance_debug(stage, context):
@@ -1422,13 +1423,22 @@ def mark_attendance(type=None, image_data=None, latitude=None, longitude=None, a
 			return _fail(geo.get("message", "You are outside assigned location."), geo.get("code", "outside_location"), {"geofence": geo})
 
 		checkin_time = _checkin_datetime(timestamp)
-		duplicate = frappe.db.exists(
-			"Employee Checkin",
-			{"employee": employee.name, "log_type": log_type, "time": ["between", [add_to_date(checkin_time, minutes=-2), add_to_date(checkin_time, minutes=2)]]},
-		)
+		# One Mark In and one Mark Out per employee per day. _attendance_sequence() checks this when the punch starts, but two
+		# requests from the same phone can arrive together (a punch still waiting for GPS while the screen was reopened) and
+		# both passed it - and the old +-2 minute check - so both were saved. Serialize per employee: end this request's read
+		# snapshot (the database runs REPEATABLE READ; nothing has been written yet), lock the employee's row until the insert
+		# below commits, then re-check the whole day with a fresh read - a second request waits here, then sees the first punch.
+		frappe.db.commit()
+		frappe.db.sql("select name from `tabEmployee` where name = %s for update", employee.name)
+		punch_day = getdate(checkin_time)
+		duplicate = frappe.db.sql(
+			"select name from `tabEmployee Checkin` where employee = %s and log_type = %s and time >= %s and time < %s limit 1",
+			(employee.name, log_type, f"{punch_day} 00:00:00", f"{add_days(punch_day, 1)} 00:00:00"),
+		) or _attendance_sequence(employee.name, log_type)[1] in ("already_marked_in", "already_marked_out")
 		if duplicate:
+			frappe.db.rollback()
 			_log_attendance_debug("duplicate_checkin_blocked", context)
-			return _fail(f"Mark {log_type.title()} already exists.", f"already_marked_{log_type.lower()}")
+			return _fail(f"Mark {log_type.title()} is already completed for today.", f"already_marked_{log_type.lower()}")
 
 		try:
 			doc = frappe.new_doc("Employee Checkin")
@@ -3955,11 +3965,27 @@ def apply_leave(employee=None, leave_type=None, from_date=None, to_date=None, ha
 		return _fail("Unable to submit leave. Please contact HR.", "setup_incomplete")
 
 
+def _whatsapp_group_url(employee=None):
+	"""Group the app opens for "Send to WhatsApp group": the group set on the employee's Project
+	(Project.custom_whatsapp_group_url, e.g. 6J Chhatarpur has its own) when there is one, else the company group
+	(site config "jew_hrms_leave_whatsapp_group_url" / LEAVE_WHATSAPP_GROUP_URL). "" in site config switches the step off
+	for everyone."""
+	default = frappe.conf.get("jew_hrms_leave_whatsapp_group_url", LEAVE_WHATSAPP_GROUP_URL)
+	if not default or not employee:
+		return default
+	try:
+		project = frappe.db.get_value("Employee", employee, "custom_project")
+		url = frappe.db.get_value("Project", project, "custom_whatsapp_group_url") if project else None
+		return (url or "").strip() or default
+	except Exception:
+		return default
+
+
 def _leave_whatsapp_payload(doc, employee_doc=None):
 	"""{"text", "group_url"} for posting a leave request in the WhatsApp group, or None when the step is switched off.
 	The text is plain WhatsApp markup (*bold*, new lines). No approval status on purpose - it is posted right after
 	applying, when it is always "pending"."""
-	group_url = frappe.conf.get("jew_hrms_leave_whatsapp_group_url", LEAVE_WHATSAPP_GROUP_URL)
+	group_url = _whatsapp_group_url(doc.get("employee") or (employee_doc.name if employee_doc else None))
 	if not group_url:
 		return None
 	emp = employee_doc or frappe.get_doc("Employee", doc.employee)
@@ -4033,7 +4059,7 @@ def _wa_clean(text, limit=300):
 def _request_whatsapp_payload(kind, doc, employee_doc=None):
 	"""{"text", "group_url"} for posting an On Duty / Late-Early / Regularization request in the same WhatsApp group
 	as leave requests (see _leave_whatsapp_payload). Same format rules: WhatsApp *bold* title, no approval status."""
-	group_url = frappe.conf.get("jew_hrms_leave_whatsapp_group_url", LEAVE_WHATSAPP_GROUP_URL)
+	group_url = _whatsapp_group_url(doc.get("employee") or (employee_doc.name if employee_doc else None))
 	if not group_url:
 		return None
 	emp = employee_doc or frappe.get_doc("Employee", doc.employee)
