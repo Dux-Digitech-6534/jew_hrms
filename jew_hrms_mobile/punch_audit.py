@@ -1793,12 +1793,15 @@ def _lv_rows(recs, byid):
 	return rows
 
 
-def _rec_match(r, chip, st):
+def _rec_match(r, chip, st, day=""):
+	if day and not (r["from"] <= day <= r["to"]):
+		return False
 	if chip == "leave" and r["kind"] != "Leave":
 		return False
 	if chip == "od" and r["kind"] != "On duty":
 		return False
-	if chip == "half" and not r["half"]:
+	# with one day picked, a half day counts only when it falls on that day
+	if chip == "half" and not (r["half"] and (not day or not r["hdate"] or r["hdate"] == day)):
 		return False
 	if st in ("ok", "pend", "rej") and r["k"] != st:
 		return False
@@ -1827,7 +1830,14 @@ def export_attendance_report(period=None, month=None, year=None, view=None, filt
 	lv_sheet = ("Leave & On duty", _lv_rows(recs, byid), LV_W, "D2")
 
 	if view == "lv":
-		shown = [r for r in recs if _rec_match(r, fl.get("chip"), fl.get("st"))]
+		# Leave & on duty tab with "Today" / "Date" picked: only entries covering that day (the day is inside the loaded month)
+		day = str(fl.get("day") or "").strip()
+		if not (re.match(r"^\d{4}-\d{2}-\d{2}$", day) and str(f) <= day <= str(t)):
+			day = ""
+		if day:
+			recs = [r for r in recs if r["from"] <= day <= r["to"]]
+			label = getdate(day).strftime("%d-%m-%Y")
+		shown = [r for r in recs if _rec_match(r, fl.get("chip"), fl.get("st"), day)]
 		summ = [["Employee ID", "Employee", "Department", "Leave days (approved)", "Leave days (pending)", "Half days (approved)",
 		         "On duty days (approved)", "Pending requests", "Rejected"]]
 		for e in emps:
