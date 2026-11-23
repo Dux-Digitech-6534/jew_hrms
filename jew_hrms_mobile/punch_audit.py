@@ -1696,6 +1696,21 @@ def _report(period, f, t, label):
 		records.append({"id": "HD:%s:%s" % (emp, ds), "emp": emp, "kind": "Half day", "type": "Late arrival" if (emp, ds) in reg_hd else "Half day (attendance)",
 		                "from": ds, "to": ds, "days": 0.5, "half": 1, "hdate": ds, "htype": "", "k": "ok", "st": "Marked", "cx": 0,
 		                "why": " · ".join(x for x in bits if x), "on": ds})
+
+	# Late coming / Early going requests (JEW Late Early Application) - shown on the Leave & on duty tab, not counted as leave days
+	for le in frappe.db.sql(
+		"""select name, employee, application_type, application_date, expected_time, reason, status, ifnull(jew_cancel_status, '') as cancel, creation
+		   from `tabJEW Late Early Application` where status <> 'Cancelled' and application_date between %(d0)s and %(d1)s""" + ef, arg, as_dict=True):
+		k = "ok" if le.status == "Approved" else "rej" if le.status == "Rejected" else "pend"
+		early = le.application_type == "Early Going"
+		x = _tstr(le.expected_time) if le.expected_time else ""
+		ds = str(getdate(le.application_date))
+		records.append({"id": le.name, "emp": le.employee, "kind": "Early going" if early else "Late coming",
+		                "type": (("Leave at " if early else "Arrive at ") + x) if x else le.application_type, "from": ds, "to": ds,
+		                "days": 0, "half": 0, "hdate": "", "htype": "", "k": k,
+		                "st": "Approved" if k == "ok" else "Rejected" if k == "rej" else LE_STAGE.get(le.status, "Pending"),
+		                "cx": 1 if k == "ok" and le.cancel.startswith("Pending") else 0,
+		                "why": str(le.reason or "").strip()[:300], "on": str(getdate(le.creation))})
 	res["records"] = sorted((r for r in records if r["emp"] in keep), key=lambda r: (r["from"], r["id"]), reverse=True)
 	return res
 
@@ -1771,9 +1786,10 @@ RP_SUM_HEAD = ["Employee ID", "Employee", "Department", "Designation", "Tracked 
                "of which no record", "Holiday / week off", "Present days (P + OD + ½ HD)", "Late days", "Early going days", "IN without OUT",
                "Total hours", "Avg hours / day"]
 RP_SUM_W = [14, 28, 20, 22, 12, 9, 9, 9, 10, 9, 11, 11, 14, 9, 11, 11, 11, 11]
-LV_HEAD = ["Type", "Employee ID", "Employee", "Department", "Leave / duty type", "From", "To", "Days", "Half day", "Half",
+LV_HEAD = ["Type", "Employee ID", "Employee", "Department", "Leave / duty / late-early detail", "From", "To", "Days", "Half day", "Half",
            "Status", "Reason / details", "Applied on", "Reference"]
 LV_W = [11, 14, 28, 20, 20, 12, 12, 7, 10, 12, 26, 44, 12, 22]
+LE_KINDS = ("Late coming", "Early going")
 
 
 def _sum_row(e, c):
@@ -1786,7 +1802,7 @@ def _lv_rows(recs, byid):
 	rows = [LV_HEAD]
 	for r in recs:
 		e = byid.get(r["emp"]) or {"name": r["emp"], "dept": ""}
-		rows.append([r["kind"], r["emp"], e["name"], e["dept"], r["type"], getdate(r["from"]), getdate(r["to"]), r["days"],
+		rows.append([r["kind"], r["emp"], e["name"], e["dept"], r["type"], getdate(r["from"]), getdate(r["to"]), "" if r["kind"] in LE_KINDS else r["days"],
 		             (getdate(r["hdate"]) if r["hdate"] else "Yes") if r["half"] else "", r["htype"],
 		             r["st"] + (" (cancellation requested)" if r["cx"] else ""), r["why"], getdate(r["on"]) if r["on"] else "",
 		             "" if r["id"].startswith("HD:") else r["id"]])
@@ -1799,6 +1815,10 @@ def _rec_match(r, chip, st, day=""):
 	if chip == "leave" and r["kind"] != "Leave":
 		return False
 	if chip == "od" and r["kind"] != "On duty":
+		return False
+	if chip == "late" and r["kind"] != "Late coming":
+		return False
+	if chip == "early" and r["kind"] != "Early going":
 		return False
 	# with one day picked, a half day counts only when it falls on that day
 	if chip == "half" and not (r["half"] and (not day or not r["hdate"] or r["hdate"] == day)):
@@ -1839,7 +1859,7 @@ def export_attendance_report(period=None, month=None, year=None, view=None, filt
 			label = getdate(day).strftime("%d-%m-%Y")
 		shown = [r for r in recs if _rec_match(r, fl.get("chip"), fl.get("st"), day)]
 		summ = [["Employee ID", "Employee", "Department", "Leave days (approved)", "Leave days (pending)", "Half days (approved)",
-		         "On duty days (approved)", "Pending requests", "Rejected"]]
+		         "On duty days (approved)", "Late coming (approved)", "Early going (approved)", "Pending requests", "Rejected"]]
 		for e in emps:
 			mine = [r for r in recs if r["emp"] == e["id"]]
 			if not mine:
@@ -1849,8 +1869,10 @@ def export_attendance_report(period=None, month=None, year=None, view=None, filt
 			             sum(r["days"] for r in mine if r["kind"] == "Leave" and r["k"] == "pend"),
 			             sum(1 for r in mine if r["half"] and r["k"] == "ok"),
 			             sum(r["days"] for r in mine if r["kind"] == "On duty" and r["k"] == "ok"),
+			             sum(1 for r in mine if r["kind"] == "Late coming" and r["k"] == "ok"),
+			             sum(1 for r in mine if r["kind"] == "Early going" and r["k"] == "ok"),
 			             sum(1 for r in mine if r["k"] == "pend"), sum(1 for r in mine if r["k"] == "rej")])
-		sheets = [("Leave & On duty", _lv_rows(shown, byid), LV_W, "D2"), ("Employee summary", summ, [14, 28, 20, 14, 14, 14, 14, 12, 10], "C2")]
+		sheets = [("Leave & On duty", _lv_rows(shown, byid), LV_W, "D2"), ("Employee summary", summ, [14, 28, 20, 14, 14, 14, 14, 14, 14, 12, 10], "C2")]
 		name = "Leave half day on duty %s" % label
 	elif per == "month":
 		summary = [RP_SUM_HEAD] + [_sum_row(e, e["c"]) for e in emps]

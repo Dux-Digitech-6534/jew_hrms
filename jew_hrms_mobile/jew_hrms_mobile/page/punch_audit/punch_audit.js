@@ -832,7 +832,7 @@ function jewPunchAuditBuild(page) {
 				}).join("") + '</tbody></table></div>';
 		}
 		const recs = (RPD.records || []).filter((r) => r.emp === e.id);
-		const rl = recs.length ? '<div class="meta"><span class="a"><b>' + recs.length + '</b> leave, half day and on duty ' + (recs.length === 1 ? "entry" : "entries") + '</span><span class="b">' + esc(RPD.label) + '</span></div>' + lvTable(recs, true) : "";
+		const rl = recs.length ? '<div class="meta"><span class="a"><b>' + recs.length + '</b> leave, half day, on duty and late / early ' + (recs.length === 1 ? "entry" : "entries") + '</span><span class="b">' + esc(RPD.label) + '</span></div>' + lvTable(recs, true) : "";
 		return head + '<div class="meta"><span class="a"><b>' + esc(RPD.label) + '</b> · ' + (year ? "month by month" : "day by day") + '</span><span class="b">' + (year ? "Select a month to open it day by day" : "Mark IN = first IN punch of the day · Mark OUT = last OUT punch") + '</span></div>' + body + rl;
 	}
 	function repView() {
@@ -848,7 +848,8 @@ function jewPunchAuditBuild(page) {
 		return rpWrap(rpPills(), bar + meta + body);
 	}
 	// Leave & on duty: leave applications, half days (half-day leave / duty, or a half day marked on attendance) and on-duty requests
-	const LV_CHIPS = [["all", "All"], ["leave", "Leave"], ["half", "Half day"], ["od", "On duty"]];
+	const LV_CHIPS = [["all", "All"], ["leave", "Leave"], ["half", "Half day"], ["od", "On duty"], ["late", "Late coming"], ["early", "Early going"]];
+	const isLE = (r) => r.kind === "Late coming" || r.kind === "Early going";
 	const LV_ST = [["all", "Any status"], ["ok", "Approved"], ["pend", "Pending"], ["rej", "Rejected"]];
 	// When: S.lvW "" = the whole month / year picked above, "today" = today only, "day" = one picked date (S.lvDate)
 	const lvDayOf = () => S.lvW === "today" ? todayStr() : S.lvW === "day" ? (S.lvDate || todayStr()) : "";
@@ -856,7 +857,8 @@ function jewPunchAuditBuild(page) {
 	const lvLbl = () => lvDayOf() ? lvDayLbl(lvDayOf()) : (RPD ? RPD.label : rpLabel());
 	// half day on the chosen day only (a 3-day leave with its half day on another date is a full day here)
 	const lvHalf = (r) => { const d = lvDayOf(); return !!r.half && (!d || !r.hdate || r.hdate === d); };
-	const lvMatch = (r, chip) => chip === "all" || (chip === "leave" && r.kind === "Leave") || (chip === "od" && r.kind === "On duty") || (chip === "half" && lvHalf(r));
+	const lvMatch = (r, chip) => chip === "all" || (chip === "leave" && r.kind === "Leave") || (chip === "od" && r.kind === "On duty") || (chip === "half" && lvHalf(r))
+		|| (chip === "late" && r.kind === "Late coming") || (chip === "early" && r.kind === "Early going");
 	function lvBase() {
 		if (!RPD) return [];
 		const ok = new Set(rpBase().map((e) => e.id)), d = lvDayOf();
@@ -872,10 +874,11 @@ function jewPunchAuditBuild(page) {
 		const rows = recs.map((r) => {
 			const e = byId[r.emp] || { id: r.emp, name: r.emp, dept: "" }, a = parseD(r.from), b = parseD(r.to);
 			const dt = r.from === r.to ? DOW[a.getDay()] + " " + fmtDs(a) + " " + a.getFullYear() : fmtDs(a) + " – " + fmtDs(b) + " " + b.getFullYear();
-			const kind = r.kind === "Leave" ? tag("draft", "Leave") : r.kind === "On duty" ? tag("ok", "On duty") : tag("pending", "Half day");
+			const kind = r.kind === "Leave" ? tag("draft", "Leave") : r.kind === "On duty" ? tag("ok", "On duty") : r.kind === "Late coming" ? tag("err", "Late coming")
+				: r.kind === "Early going" ? tag("pending", "Early going") : tag("pending", "Half day");
 			const half = r.half && r.kind !== "Half day" ? tag("pending", "Half day" + (r.htype ? " · " + esc(r.htype) : "") + (r.hdate && r.from !== r.to ? " · " + fmtDs(parseD(r.hdate)) : "")) : "";
 			return '<tr' + (compact ? "" : ' data-rp="emp:' + esc(r.emp) + '" tabindex="0"') + '>' + (compact ? "" : exEmpCell(e)) + '<td>' + kind + '<div class="sub" style="margin-top:5px">' + esc(r.type) + '</div></td>'
-				+ '<td><span class="dtm">' + dt + '</span>' + (half ? '<div style="margin-top:5px">' + half + '</div>' : "") + '</td><td><span class="num">' + nfx(r.days) + '</span></td>'
+				+ '<td><span class="dtm">' + dt + '</span>' + (half ? '<div style="margin-top:5px">' + half + '</div>' : "") + '</td><td>' + (isLE(r) ? '<span class="sub">—</span>' : '<span class="num">' + nfx(r.days) + '</span>') + '</td>'
 				+ '<td class="chips">' + tag(kTag(r.k), esc(r.st)) + (r.cx ? tag("pending", "Cancellation requested") : "") + '</td><td style="white-space:normal;min-width:220px;max-width:380px"><span class="sub">' + (esc(r.why) || "—") + '</span></td></tr>';
 		}).join("");
 		return '<div class="tscroll"><table class="dt xt"><thead><tr>' + (compact ? "" : "<th>Employee</th>") + '<th>Type</th><th>Dates</th><th>Days</th><th>Status</th><th>Reason / details</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
@@ -889,10 +892,10 @@ function jewPunchAuditBuild(page) {
 		if (S.lvSt !== "all") extra.push(pill("filter", "Status", (LV_ST.find((x) => x[0] === S.lvSt) || [])[1], "pending"));
 		const bar = '<div class="xbar">' + LV_CHIPS.map((x) => '<button type="button" class="xchip' + (S.lvChip === x[0] ? " on" : "") + '" data-lv="chip:' + x[0] + '">' + x[1] + ' <span class="n">' + base.filter((r) => lvMatch(r, x[0]) && (S.lvSt === "all" || r.k === S.lvSt)).length + '</span></button>').join("")
 			+ '<span class="sp"></span><span class="xseg">' + LV_ST.map((x) => '<button type="button" class="' + (S.lvSt === x[0] ? "on" : "") + '" data-lv="st:' + x[0] + '">' + x[1] + '</button>').join("") + '</span></div>';
-		const meta = '<div class="meta"><span class="a"><b>' + list.length + '</b> ' + (list.length === 1 ? "entry" : "entries") + ' · ' + esc(lvLbl()) + '</span><span class="b">' + (lvDayOf() ? "Leave, half day and on duty covering this day" : "Leave applications, half days and on-duty requests") + ' · select a row for that employee’s days</span></div>';
+		const meta = '<div class="meta"><span class="a"><b>' + list.length + '</b> ' + (list.length === 1 ? "entry" : "entries") + ' · ' + esc(lvLbl()) + '</span><span class="b">' + (lvDayOf() ? "Leave, half day, on duty and late / early requests for this day" : "Leave, half day, on duty and late coming / early going requests") + ' · select a row for that employee’s days</span></div>';
 		return rpWrap(rpPills(extra), bar + meta + (list.length ? lvTable(list, false) : lvDayOf()
-			? emptyBody("Nobody on " + lvDayLbl(lvDayOf()), "No leave, half day or on duty covers this day for these filters. Pick another date, or Month-wise above.")
-			: emptyBody("Nothing in this view", "No leave, half day or on duty matches these filters. Try another chip, status or period.")));
+			? emptyBody("Nobody on " + lvDayLbl(lvDayOf()), "No leave, half day, on duty or late / early request for this day with these filters. Pick another date, or Month-wise above.")
+			: emptyBody("Nothing in this view", "No leave, half day, on duty or late / early request matches these filters. Try another chip, status or period.")));
 	}
 	function rpKpiBlock() {
 		const b = rpBase(), sum = (k) => b.reduce((a, e) => a + (e.c[k] || 0), 0), team = RPD.viewer && RPD.viewer.scope === "team";
@@ -908,18 +911,22 @@ function jewPunchAuditBuild(page) {
 	function lvKpiBlock() {
 		const b = lvBase(), ok = b.filter((r) => r.k === "ok"), lv = ok.filter((r) => r.kind === "Leave"), od = ok.filter((r) => r.kind === "On duty"), day = lvDayOf();
 		const ppl = (a) => new Set(a.map((r) => r.emp)).size;
+		// Late coming / Early going: approved requests, with the pending ones in the small line
+		const leK = (kind, l) => { const ap = ok.filter((r) => r.kind === kind).length, pn = b.filter((r) => r.kind === kind && r.k === "pend").length;
+			return { l: l, v: ap, s: "approved" + (pn ? " · " + pn + " pending" : ""), c: kind === "Late coming" ? "err" : "pending" }; };
 		const K = day ? [{ l: "On leave", v: ppl(lv), s: "employees with approved leave", c: "" },
 			{ l: "Half day", v: ok.filter(lvHalf).length, s: "half-day leave, duty or attendance", c: "pending" },
 			{ l: "On duty", v: ppl(od), s: "employees with approved on duty", c: "ok" },
+			leK("Late coming", "Late coming"), leK("Early going", "Early going"),
 			{ l: "Pending", v: b.filter((r) => r.k === "pend").length, s: "waiting for an approval", c: "pending" }]
 		: [{ l: "Leave days", v: nfx(lv.reduce((a, r) => a + r.days, 0)), s: lv.length + (lv.length === 1 ? " approved application" : " approved applications"), c: "" },
 			{ l: "Half days", v: ok.filter(lvHalf).length, s: "half-day leave, duty or attendance", c: "pending" },
 			{ l: "On duty days", v: nfx(od.reduce((a, r) => a + r.days, 0)), s: od.length + (od.length === 1 ? " approved request" : " approved requests"), c: "ok" },
+			leK("Late coming", "Late coming"), leK("Early going", "Early going"),
 			{ l: "Pending", v: b.filter((r) => r.k === "pend").length, s: "waiting for an approval", c: "pending" }];
-		$$("kpis").classList.add("k4");
 		$$("kpis").innerHTML = K.map((x) => '<div class="card kpi"><span class="lbl">' + x.l + '</span><span class="v ' + x.c + '">' + x.v + '</span><span class="s">' + x.s + '</span></div>').join("");
 		const ne = new Set(b.map((r) => r.emp)).size;
-		$$("lead").innerHTML = 'Leave, half day and on duty for <span class="num">' + ne + '</span> ' + (ne === 1 ? "employee" : "employees") + ' · ' + esc(lvLbl()) + '.';
+		$$("lead").innerHTML = 'Leave, half day, on duty, late coming and early going for <span class="num">' + ne + '</span> ' + (ne === 1 ? "employee" : "employees") + ' · ' + esc(lvLbl()) + '.';
 	}
 	function syncRpControls() {
 		const rp = isRp();
