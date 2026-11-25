@@ -72,6 +72,29 @@ def active_enabled():
 	return get_mode() == "active"
 
 
+# Per-employee switch (Employee.custom_live_face_check): HR, or the employee's Dept Head from the Punch audit page
+# ("Live check" tab), turns the live scan on for ONE person while the rest of the site stays on the normal selfie.
+EMPLOYEE_FLAG = "custom_live_face_check"
+
+
+def employee_flag(employee):
+	"""True when the live face check is switched on for this one employee."""
+	if not employee:
+		return False
+	try:
+		if not frappe.db.has_column("Employee", EMPLOYEE_FLAG):
+			return False
+		return bool(frappe.db.get_value("Employee", employee, EMPLOYEE_FLAG))
+	except Exception:
+		return False
+
+
+def active_for(employee):
+	"""ACTIVE live scan for this employee's Mark In / Mark Out: the whole site is on "active", or this employee's
+	own switch is on. Face REGISTRATION keeps using the site-wide active_enabled() only."""
+	return active_enabled() or employee_flag(employee)
+
+
 def _threshold():
 	try:
 		return float(frappe.conf.get("jew_hrms_liveness_threshold", DEFAULT_THRESHOLD))
@@ -150,12 +173,13 @@ def _preprocess(image, face_box):
 	return np.transpose(arr, (2, 0, 1))[None, ...]
 
 
-def evaluate(image, face_box, employee=None):
+def evaluate(image, face_box, employee=None, force=False):
 	"""Score one selfie. Returns None when liveness is off or unavailable (caller then does nothing),
 	otherwise a plain-JSON dict:
-	  {"mode", "enforce", "is_real", "score", "real_logit", "spoof_logit", "threshold", "ms"}"""
+	  {"mode", "enforce", "is_real", "score", "real_logit", "spoof_logit", "threshold", "ms"}
+	force=True (the active live scan of a per-employee switch) scores even when the site mode is "off"."""
 	mode = get_mode()
-	if mode == "off":
+	if mode == "off" and not force:
 		return None
 	try:
 		session, input_name = _get_session()

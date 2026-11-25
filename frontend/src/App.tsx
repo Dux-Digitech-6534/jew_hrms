@@ -942,7 +942,7 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange, open
   // Live-scan sites only: ask the server for the random challenge as soon as the verify screen opens, so the tap does not wait for it.
   const challengeRef = useRef<{ c: any; t: number; type: string } | null>(null);
   useEffect(() => {
-    if (!verifyType || !isLiveScanSite()) return;
+    if (!verifyType || !(isLiveScanSite() || status?.live_scan)) return;
     let alive = true;
     call(API.livenessStart, { type: verifyType }).then((c: any) => { if (alive && c?.enabled && !c.locked) challengeRef.current = { c, t: Date.now(), type: verifyType }; }).catch(() => { /* confirmVerify fetches its own */ });
     return () => { alive = false; };
@@ -1097,7 +1097,8 @@ function Attendance({ flash, onMarked, initialStatus, onCameraActiveChange, open
     const myRun = ++runRef.current;
     const cancelled = () => runRef.current !== myRun;
     // GPS runs in parallel with the photo (or was already pre-warmed) on every site - the punch never waits for it afterwards.
-    const liveOn = isLiveScanSite();
+    // the whole site, or this employee's own live-check switch (status.live_scan from the server)
+    const liveOn = isLiveScanSite() || Boolean(status?.live_scan);
     triesRef.current += 1;
     const tConfirm = performance.now();
     const usedPre = Boolean(prewarmFresh());

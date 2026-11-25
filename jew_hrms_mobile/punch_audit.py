@@ -1927,3 +1927,75 @@ def export_attendance_report(period=None, month=None, year=None, view=None, filt
 	if only and byid:
 		name += " - " + byid[only]["name"]
 	provide_binary_file(name, "xlsx", _xlsx_book(sheets))
+
+
+# ---- Live check: who must do the live face scan (turn head / blink) before Mark In / Mark Out --------------------
+# Employee.custom_live_face_check, read by liveness_service.active_for(). HR / Admin switch it for anyone; a Dept Head
+# for the people in their own team (the same team the page already shows them), never for themselves.
+LIVE_FLAG = "custom_live_face_check"
+
+
+def _face_counts(ids):
+	"""employee -> (approved face, waiting for approval)"""
+	out = {}
+	if not ids or not frappe.db.table_exists("JEW Employee Face"):
+		return out
+	has_appr = frappe.db.has_column("JEW Employee Face", "approval_status")
+	for r in frappe.db.sql("""select employee, sum(is_active = 1) ok, %s pend from `tabJEW Employee Face` where employee in %%(ids)s group by employee"""
+	                       % ("sum(approval_status = 'Pending Approval')" if has_appr else "0"), {"ids": tuple(ids)}, as_dict=True):
+		out[r.employee] = (cint(r.ok), cint(r.pend))
+	return out
+
+
+@frappe.whitelist()
+def get_live_check():
+	"""Active employees the viewer may switch the live face check for: everyone for HR / Admin, the own team for a Dept Head."""
+	_require_access()
+	viewer = _viewer()
+	if not frappe.db.has_column("Employee", LIVE_FLAG):
+		return {"ready": False, "rows": [], "viewer": viewer}
+	sc = _scope()
+	if sc is not None and not sc:
+		return {"ready": True, "rows": [], "viewer": viewer, "all": False}
+	cond, args = "e.status = 'Active'", {}
+	if sc is not None:
+		cond += " and e.name in %(sc)s"
+		args["sc"] = tuple(sc)
+	rows = frappe.db.sql("""select e.name, e.employee_name, ifnull(e.department, '') dept, ifnull(e.designation, '') desig,
+			ifnull(p.project_name, '') proj, ifnull(e.%s, 0) live, lower(trim(ifnull(e.custom_dept_head_email, ''))) head, ifnull(e.user_id, '') uid
+			from `tabEmployee` e left join `tabProject` p on p.name = e.custom_project where %s order by e.employee_name""" % (LIVE_FLAG, cond), args, as_dict=True)
+	faces = _face_counts([r.name for r in rows])
+	heads = {}
+	for em in {r.head for r in rows if r.head}:
+		heads[em] = frappe.db.get_value("User", {"name": em}, "full_name") or frappe.db.get_value("User", {"email": em}, "full_name") or em
+	own = frappe.db.get_value("Employee", {"user_id": frappe.session.user}, "name")
+	out = []
+	for r in rows:
+		ok, pend = faces.get(r.name, (0, 0))
+		out.append({"id": r.name, "name": r.employee_name or r.name, "dept": r.dept, "desig": r.desig, "proj": r.proj, "live": cint(r.live),
+		            "face": "ok" if ok else ("pending" if pend else "none"), "head": heads.get(r.head, ""), "app": 1 if r.uid else 0,
+		            "can": 0 if (sc is not None and r.name == own) else 1})
+	return {"ready": True, "rows": out, "viewer": viewer, "all": sc is None}
+
+
+@frappe.whitelist(methods=["POST"])
+def set_live_check(employee=None, enabled=None):
+	"""Switch the live face check on / off for one employee. Takes effect from that person's next punch."""
+	_require_access()
+	if not frappe.db.has_column("Employee", LIVE_FLAG):
+		frappe.throw(_("Live check is not set up on this site."))
+	if not employee or not frappe.db.exists("Employee", employee):
+		frappe.throw(_("Employee not found."))
+	sc = _scope()
+	if sc is not None:
+		if employee not in sc:
+			frappe.throw(_("You can switch the live face check only for your own team."), frappe.PermissionError)
+		if employee == frappe.db.get_value("Employee", {"user_id": frappe.session.user}, "name"):
+			frappe.throw(_("Your own live face check can be changed by HR or your Dept Head."), frappe.PermissionError)
+	on = 1 if cint(enabled) else 0
+	if cint(frappe.db.get_value("Employee", employee, LIVE_FLAG)) != on:
+		frappe.db.set_value("Employee", employee, LIVE_FLAG, on, update_modified=False)
+		frappe.get_doc({"doctype": "Comment", "comment_type": "Info", "reference_doctype": "Employee", "reference_name": employee,
+		                "content": "Live face check turned %s by %s" % ("ON" if on else "OFF", frappe.session.user)}).insert(ignore_permissions=True)
+		frappe.db.commit()
+	return {"employee": employee, "live": on}

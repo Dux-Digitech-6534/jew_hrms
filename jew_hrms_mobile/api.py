@@ -592,7 +592,17 @@ def _attendance_status_payload(employee):
 		"location_details": {"assigned": len(locations), "ready": bool(locations) or loc_optional, "optional": loc_optional, "status": location_state},
 		"in_time_label": checkin_label,
 		"out_time_label": checkout_label,
+		# the app films the live scan (turn head / blink) before Mark In / Out when this is true
+		"live_scan": _live_scan_for(employee.name),
 	}
+
+
+def _live_scan_for(employee_name):
+	try:
+		from jew_hrms_mobile import liveness_service
+		return bool(liveness_service.active_for(employee_name))
+	except Exception:
+		return False
 
 
 def _get_active_policy(employee=None, shift=None, required=False):
@@ -1304,18 +1314,22 @@ def liveness_start(type=None, employee=None):
 	with jew_hrms_liveness_mode = "active" it returns a fresh RANDOM challenge (see liveness_active.py)."""
 	try:
 		from jew_hrms_mobile import liveness_active, liveness_service
-		if not liveness_service.active_enabled():
-			return _ok({"enabled": False})
 		scope = "att"
 		if employee:
 			# face REGISTRATION: an admin / dept head films the person being enrolled, so the challenge is
 			# bound to THAT employee (not to the logged-in admin) and to the separate "reg" scope.
+			# Registration follows the site-wide switch only (a per-employee switch never films enrolment).
+			if not liveness_service.active_enabled():
+				return _ok({"enabled": False})
 			_require_login()
 			if not frappe.db.exists("Employee", employee) or not (_can_manage_employee(employee) or _face_approval.is_self_registrant(employee)):
 				return _fail("You do not have permission for this employee.", "permission_denied")
 			subject, scope = employee, "reg"
 		else:
 			subject = _get_current_employee().name
+			# Mark In / Mark Out: the whole site on "active", or this employee's own live-check switch
+			if not liveness_service.active_for(subject):
+				return _ok({"enabled": False})
 		locked = liveness_active.lockout_message(subject, scope)
 		if locked:
 			return _ok({"enabled": True, "locked": True, "message": locked})
@@ -1376,7 +1390,7 @@ def mark_attendance(type=None, image_data=None, latitude=None, longitude=None, a
 		# client sent as face_image is ignored, so a photo cannot be slipped in next to a live burst.
 		from jew_hrms_mobile import liveness_active, liveness_service
 		live_encoding = None
-		if liveness_service.active_enabled():
+		if liveness_service.active_for(employee.name):
 			live_ok, live_res = liveness_active.verify_active(employee.name, liveness_challenge, liveness_frames)
 			context["liveness_code"] = live_res.get("code")
 			if not live_ok:

@@ -376,7 +376,7 @@ def verify_active(employee, token, frames_json, scope="att"):
 			if ok and _num("jew_hrms_liveness_passive", 1, int):
 				# extra evidence only (never blocks in active mode): the single-image MiniFASNet score.
 				# Set site_config jew_hrms_liveness_passive = 0 to skip it (saves ~0.4 s per scan); default keeps it.
-				passive = base.evaluate(first_rgb, metrics[info["first_idx"]]["box"], employee)
+				passive = base.evaluate(first_rgb, metrics[info["first_idx"]]["box"], employee, force=True)
 				pmin = frappe.conf.get("jew_hrms_liveness_passive_min")
 				if pmin is not None and passive and passive.get("score") is not None and passive["score"] < float(pmin):
 					ok, reason = False, "not_live"

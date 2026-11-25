@@ -72,7 +72,13 @@ function jewPunchAuditBuild(page) {
 		+ ".cbx-o.act,.cbx-o:hover{background:var(--iris-tint)}"
 		+ ".cbx-o.all{border-bottom:1px solid var(--border-subtle);border-radius:var(--r-sm) var(--r-sm) 0 0;margin-bottom:4px}"
 		+ ".cbx-o mark{background:transparent;color:var(--iris);font-weight:700;padding:0}"
-		+ ".cbx-e{padding:16px 10px;font-size:var(--fs-sm);color:var(--text-muted);text-align:center}";
+		+ ".cbx-e{padding:16px 10px;font-size:var(--fs-sm);color:var(--text-muted);text-align:center}"
+		// Live check tab
+		+ ".lcnote{display:flex;gap:10px;align-items:flex-start;margin:0 18px 12px;padding:12px 14px;border-radius:var(--r-md);background:var(--iris-tint);color:var(--text-primary);font-size:var(--fs-sm);line-height:1.5}"
+		+ ".lcnote svg{flex:none;margin-top:2px;color:var(--iris)}"
+		+ ".sw.lcsw{min-width:78px;justify-content:flex-start}"
+		+ ".sw.lcsw[disabled]{opacity:.45;cursor:not-allowed}"
+		+ ".sw.lcsw.busy{opacity:.6;pointer-events:none}";
 	root.innerHTML = "<style>" + CSS + CSS_RP + CSS_LOC + "</style>" + HTML;
 	const $$ = (id) => root.getElementById(id);
 	const qa = (s) => Array.from(root.querySelectorAll(s));
@@ -126,10 +132,11 @@ function jewPunchAuditBuild(page) {
 	let DATA = { punches: [], face_limit: 0.55, retention_days: 90, liveness_mode: "off", capture_since: null, range: {} };
 	let NPD = null, EXD = null, exLoading = false, ROWS = [], EMP = {}, loading = true, loadError = null, loadedAt = 0, seq = 0;
 	let RPD = null, rpLoading = false; const rpCache = {};
+	let LCD = null, lcLoading = false;   // Live check tab (server: get_live_check / set_live_check)
 	const S = { range: "month", month: curMonth(), from: "", to: "", q: "", dept: "", loc: "", proj: "", type: "", src: "", dev: "", onlyFlag: false, onlyPhoto: false, tab: "mon", kpi: null, anim: true, empView: null, npLogin: true, npHide: false, exChip: "all", exView: "tbl", exEmp: null,
-		rp: "month", rpMonth: curMonth(), rpYear: String(new Date().getFullYear()), rpView: "reg", rpEmp: null, lvChip: "all", lvSt: "all", lvW: "", lvDate: "" };
+		rp: "month", rpMonth: curMonth(), rpYear: String(new Date().getFullYear()), rpView: "reg", rpEmp: null, lvChip: "all", lvSt: "all", lvW: "", lvDate: "", lcChip: "all" };
 	// Deep link (DUX portal cards): /desk/punch-audit?tab=rep (Attendance report) or ?tab=lv (Leave & on duty), optional &period=year
-	const TABS = ["mon", "np", "ex", "rep", "lv", "sus", "all", "dev", "emp"];
+	const TABS = ["mon", "np", "ex", "rep", "lv", "sus", "all", "dev", "emp", "lc"];
 	let urlTabSeen = "";
 	function applyUrlTab() {
 		let p; try { p = new URLSearchParams(window.location.search); } catch (e) { return false; }
@@ -178,7 +185,7 @@ function jewPunchAuditBuild(page) {
 	function fillSelects() {
 		const opt = (el, first, vals, cur) => { el.innerHTML = '<option value="">' + first + '</option>' + vals.map((v) => '<option' + (v === cur ? " selected" : "") + '>' + esc(v) + '</option>').join(""); };
 		const uniq = (k) => Array.from(new Set(ROWS.map((p) => p[k]).filter(Boolean))).sort();
-		opt($$("fDept"), "All departments", Array.from(new Set(uniq("dept").concat(((NPD && NPD.employees) || []).map((e) => e.dept).filter(Boolean)).concat(((RPD && RPD.employees) || []).map((e) => e.dept).filter(Boolean)))).sort(), S.dept);
+		opt($$("fDept"), "All departments", Array.from(new Set(uniq("dept").concat(((NPD && NPD.employees) || []).map((e) => e.dept).filter(Boolean)).concat(((RPD && RPD.employees) || []).map((e) => e.dept).filter(Boolean)).concat(((LCD && LCD.rows) || []).map((e) => e.dept).filter(Boolean)))).sort(), S.dept);
 		CBX.loc.fill(); CBX.proj.fill();
 		opt($$("fSrc"), "All sources", uniq("source"), S.src);
 	}
@@ -186,7 +193,7 @@ function jewPunchAuditBuild(page) {
 	// pick, x to clear. The lists hold what the viewer may see (everything for HR / Admin, the team's for a Dept Head).
 	// Location - punch tabs match the punch's own location; employee tabs (Not punched, Exceptions, Attendance report,
 	// Leave) match the employee's assigned locations. Project - Employee.custom_project, on every tab.
-	const empTab = () => isRp() || S.tab === "np" || S.tab === "ex";
+	const empTab = () => isRp() || S.tab === "np" || S.tab === "ex" || S.tab === "lc";
 	const atLoc = (id) => !S.loc || (((DATA.emp_locs || {})[id]) || []).includes(S.loc);
 	const inProj = (id) => !S.proj || ((DATA.emp_proj || {})[id] || "") === S.proj;
 	const tally = (vals) => { const c = {}; vals.forEach((v) => { if (v) c[v] = (c[v] || 0) + 1; }); return c; };
@@ -928,10 +935,69 @@ function jewPunchAuditBuild(page) {
 		const ne = new Set(b.map((r) => r.emp)).size;
 		$$("lead").innerHTML = 'Leave, half day, on duty, late coming and early going for <span class="num">' + ne + '</span> ' + (ne === 1 ? "employee" : "employees") + ' · ' + esc(lvLbl()) + '.';
 	}
+	// ---- Live check tab: who must do the live face scan (turn head / blink) before Mark In / Mark Out.
+	// HR / Admin see everyone, a Dept Head sees their own team (server decides, same as the other employee tabs).
+	const LC_CHIPS = [["all", "All"], ["on", "Live check ON"], ["off", "Live check OFF"]];
+	function lcBase() {
+		const q = S.q.trim().toLowerCase();
+		return ((LCD && LCD.rows) || []).filter((r) => (!q || r.name.toLowerCase().includes(q) || r.id.toLowerCase().includes(q))
+			&& (!S.dept || r.dept === S.dept) && atLoc(r.id) && (!S.proj || r.proj === S.proj));
+	}
+	async function loadLive(force) {
+		if (lcLoading) return;
+		lcLoading = true; if (force) LCD = null; render();
+		const r = await callApi("get_live_check", {});
+		lcLoading = false; LCD = r.ok && r.data ? r.data : null;
+		fillSelects(); S.anim = true; render();
+	}
+	async function toggleLive(id) {
+		const r = ((LCD && LCD.rows) || []).find((x) => x.id === id);
+		if (!r || r.busy || !r.can) return;
+		r.busy = true; render();
+		const res = await callApi("set_live_check", { employee: id, enabled: r.live ? 0 : 1 });
+		r.busy = false;
+		if (res.ok && res.data) { r.live = res.data.live; toast("Live check " + (r.live ? "ON" : "OFF") + " for " + r.name); }
+		else toast("Could not change the live check for " + r.name);
+		render();
+	}
+	function lcKpiBlock() {
+		const b = lcBase(), on = b.filter((r) => r.live);
+		const K = [{ l: "Employees", v: b.length, s: LCD && LCD.all ? "in this view" : "in your team", c: "" },
+			{ l: "Live check ON", v: on.length, s: "turn head before Mark In / Out", c: "ok" },
+			{ l: "ON, face not approved", v: on.filter((r) => r.face !== "ok").length, s: "cannot punch until approved", c: "pending" },
+			{ l: "Live check OFF", v: b.length - on.length, s: "normal selfie punch", c: "" }];
+		$$("kpis").classList.add("k4");
+		$$("kpis").innerHTML = K.map((x) => '<div class="card kpi"><span class="lbl">' + x.l + '</span><span class="v ' + x.c + '">' + x.v + '</span><span class="s">' + x.s + '</span></div>').join("");
+		$$("lead").innerHTML = 'Live face check is ON for <span class="num">' + on.length + '</span> of <span class="num">' + b.length + '</span> ' + (b.length === 1 ? "employee" : "employees") + (LCD && LCD.all ? "" : " in your team") + '.';
+	}
+	function lcView() {
+		const wait = (h, p) => '<div class="card accent turn"><div class="empty"><img class="mascot" src="' + MASCOT + '" alt=""><h3>' + h + '</h3><p>' + p + '</p></div></div>';
+		if (!LCD) return lcLoading ? wait('<span class="shim">Reading employees…</span>', "Collecting the employees you can switch the live face check for.") : wait("Could not load the live check list", "Press Refresh to try again.");
+		if (!LCD.ready) return wait("Live check is not set up on this site", "Ask the HRMS admin to add the Live face check field.");
+		const base = lcBase(), match = (r, c) => c === "all" || (c === "on" ? !!r.live : !r.live), list = base.filter((r) => match(r, S.lcChip));
+		const pills = [pill("camera", "Show", (LC_CHIPS.find((x) => x[0] === S.lcChip) || LC_CHIPS[0])[1], "cyan")];
+		if (S.q) pills.push(pill("user", "Employee", S.q, "iris"));
+		if (S.dept) pills.push(pill("building", "Department", S.dept, "iris"));
+		if (S.proj) pills.push(pill("box", "Project", S.proj, "iris"));
+		if (S.loc) pills.push(pill("pin", "Assigned location", S.loc, "iris"));
+		pills.push(LCD.all ? pill("box", "Scope", "All employees", "iris") : pill("user", "Scope", "Your team · " + ((LCD.viewer && LCD.viewer.team_size) || base.length) + " employees", "iris"));
+		const note = '<div class="lcnote">' + ic("info", 15) + '<span>When <b>Live check</b> is ON, the person has to turn their head (a live scan) in the app before Mark In and Mark Out, so a photo or a video on another phone cannot mark attendance. Everybody else keeps the normal selfie. A change works from their next punch.'
+			+ (LCD.all ? "" : " You can switch it for the people in your team; your own is switched by HR or your Dept Head.") + '</span></div>';
+		const bar = '<div class="xbar">' + LC_CHIPS.map((x) => '<button type="button" class="xchip' + (S.lcChip === x[0] ? " on" : "") + '" data-lcc="' + x[0] + '">' + x[1] + ' <span class="n">' + base.filter((r) => match(r, x[0])).length + '</span></button>').join("") + '</div>';
+		const meta = '<div class="meta"><span class="a"><b>' + list.length + '</b> ' + (list.length === 1 ? "employee" : "employees") + '</span><span class="b">Switch ON / OFF in the last column · saved at once</span></div>';
+		const face = (r) => (r.face === "ok" ? tag("ok", "Face approved") : r.face === "pending" ? tag("pending", "Face waiting for approval") : tag("err", "No face registered")) + (r.app ? "" : tag("draft", "No app login"));
+		const rows = list.map((r) => '<tr><td class="emp"><b>' + esc(r.name) + '</b><span><span class="id" style="font-size:12px">' + esc(r.id) + '</span> · ' + (r.dept ? esc(r.dept) : "No department") + (r.desig ? " · " + esc(r.desig) : "") + '</span></td>'
+			+ '<td>' + (r.proj ? esc(r.proj) : '<span class="sub">—</span>') + '</td><td class="chips">' + face(r) + '</td><td>' + (r.head ? esc(r.head) : '<span class="sub">—</span>') + '</td>'
+			+ '<td><button type="button" class="sw lcsw' + (r.live ? " on" : "") + (r.busy ? " busy" : "") + '" data-lc="' + esc(r.id) + '"' + (r.can ? "" : ' disabled title="Your own live check is switched by HR or your Dept Head"')
+			+ ' aria-pressed="' + (r.live ? "true" : "false") + '" aria-label="Live check for ' + esc(r.name) + '"><i></i>' + (r.live ? "ON" : "OFF") + '</button></td></tr>').join("");
+		const table = '<div class="tscroll"><table class="dt xt"><thead><tr><th>Employee</th><th>Project</th><th>Face</th><th>Dept head</th><th>Live check</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+		return '<div class="card accent' + (S.anim ? " turn" : "") + '"><div class="fbar"><div class="hd">' + ic("filter", 13) + 'Showing results for</div><div class="pills">' + pills.join("") + '</div></div>'
+			+ note + bar + meta + (list.length ? table : emptyBody("Nobody in this view", "Clear the employee, department or project filter, or pick another chip.")) + '</div>';
+	}
 	function syncRpControls() {
-		const rp = isRp();
-		["rangeSeg", "monBox", "dates", "photoToggle", "flagToggle"].forEach((id) => { $$(id).style.display = rp ? "none" : ""; });
-		qa(".fld.pa-only").forEach((el) => { el.style.display = rp ? "none" : ""; });
+		const rp = isRp(), noRange = rp || S.tab === "lc";
+		["rangeSeg", "monBox", "dates", "photoToggle", "flagToggle"].forEach((id) => { $$(id).style.display = noRange ? "none" : ""; });
+		qa(".fld.pa-only").forEach((el) => { el.style.display = noRange ? "none" : ""; });
 		const lv = S.tab === "lv", oneDay = lv && !!S.lvW;
 		$$("rpSeg").style.display = rp && !lv ? "" : "none";
 		$$("lvSeg").style.display = lv ? "" : "none";
@@ -943,11 +1009,12 @@ function jewPunchAuditBuild(page) {
 		if (S.lvW === "day" && $$("lvDate").value !== (S.lvDate || todayStr())) $$("lvDate").value = S.lvDate || todayStr();
 		if ($$("rpMonth").value !== S.rpMonth) $$("rpMonth").value = S.rpMonth;
 		if ($$("rpYear").value !== S.rpYear) $$("rpYear").value = S.rpYear;
-		$$("capnote").style.display = rp ? "none" : "";
+		$$("capnote").style.display = noRange ? "none" : "";
 	}
 	function render() {
 		const list = baseList(); kpiBlock(list); $$("kpis").classList.remove("k4"); if (S.tab === "np" && !loading && !loadError) npKpiBlock(); else if (S.tab === "ex" && !loading && !loadError && EXD) exKpiBlock();
 		else if (S.tab === "rep" && RPD) rpKpiBlock(); else if (S.tab === "lv" && RPD) lvKpiBlock(); else if (isRp()) { $$("kpis").innerHTML = ""; $$("lead").innerHTML = rpLoading ? "Building the report for " + esc(rpLabel()) + "…" : ""; }
+		else if (S.tab === "lc") { if (LCD && LCD.ready) lcKpiBlock(); else { $$("kpis").innerHTML = ""; $$("lead").innerHTML = lcLoading ? "Reading the live check list…" : ""; } }
 		syncRpControls();
 		const flaggedList = list.filter((p) => p.flagged);
 		let tabList = S.tab === "sus" ? flaggedList.slice().sort((a, b) => b.sev - a.sev) : (S.onlyFlag ? flaggedList : list);
@@ -963,8 +1030,10 @@ function jewPunchAuditBuild(page) {
 			+ '<button class="tab' + (S.tab === "all" ? " on" : "") + '" data-t="all">All punches <span class="badge mono">' + list.length + '</span></button>'
 			+ '<button class="tab' + (S.tab === "dev" ? " on" : "") + '" data-t="dev">' + ic("phone", 14) + 'Devices <span class="badge mono">' + devCount + '</span></button>'
 			+ '<button class="tab' + (S.tab === "emp" ? " on" : "") + '" data-t="emp">' + ic("user", 14) + 'Employees <span class="badge mono">' + empCount + '</span></button>'
+			+ '<button class="tab' + (S.tab === "lc" ? " on" : "") + '" data-t="lc">' + ic("camera", 14) + 'Live check <span class="badge mono">' + (LCD && LCD.ready ? lcBase().filter((r) => r.live).length : "…") + '</span></button>'
 			+ '<span class="sp"></span><button class="help" id="legendBtn">' + ic("info", 14) + 'How flags work</button>';
 		const v = $$("view");
+		if (S.tab === "lc") { v.innerHTML = lcView(); S.anim = false; return; }
 		if (isRp()) { v.innerHTML = S.tab === "rep" ? repView() : lvView(); S.anim = false; return; }
 		if (loading) { v.innerHTML = '<div class="card accent turn"><div class="empty"><img class="mascot" src="' + MASCOT + '" alt=""><h3><span class="shim">Reading punch data…</span></h3><p>Collecting punches, photos and devices for the selected dates.</p></div></div>'; S.anim = false; return; }
 		if (loadError) { v.innerHTML = '<div class="card accent"><div class="empty"><h3>Could not load punches</h3><p>' + esc(loadError) + '</p></div></div>'; return; }
@@ -1085,9 +1154,9 @@ function jewPunchAuditBuild(page) {
 	[["fDept", "dept"], ["fType", "type"], ["fSrc", "src"]].forEach(([id, k]) => $$(id).addEventListener("change", (e) => { S[k] = e.target.value; render(); }));
 	$$("flagToggle").addEventListener("click", () => { S.onlyFlag = !S.onlyFlag; $$("flagToggle").classList.toggle("on", S.onlyFlag); render(); });
 	$$("photoToggle").addEventListener("click", () => { S.onlyPhoto = !S.onlyPhoto; $$("photoToggle").classList.toggle("on", S.onlyPhoto); render(); });
-	$$("resetBtn").addEventListener("click", () => { const rangeChanged = S.range !== "month" || S.month !== curMonth(); S.month = curMonth(); Object.assign(S, { q: "", dept: "", loc: "", proj: "", type: "", src: "", dev: "", onlyFlag: false, onlyPhoto: false, kpi: null, anim: true, empView: null, npLogin: true, npHide: false, exChip: "all", exView: "tbl", exEmp: null, rpEmp: null, lvChip: "all", lvSt: "all", lvW: "" }); ["fQ", "fDev", "fDept", "fType", "fSrc"].forEach((i) => { $$(i).value = ""; }); CBX.loc.reset(); CBX.proj.reset(); $$("flagToggle").classList.remove("on"); $$("photoToggle").classList.remove("on"); setRange("month"); if (rangeChanged) loadData(); else render(); toast("Filters reset"); });
+	$$("resetBtn").addEventListener("click", () => { const rangeChanged = S.range !== "month" || S.month !== curMonth(); S.month = curMonth(); Object.assign(S, { q: "", dept: "", loc: "", proj: "", type: "", src: "", dev: "", onlyFlag: false, onlyPhoto: false, kpi: null, anim: true, empView: null, npLogin: true, npHide: false, exChip: "all", exView: "tbl", exEmp: null, rpEmp: null, lvChip: "all", lvSt: "all", lvW: "", lcChip: "all" }); ["fQ", "fDev", "fDept", "fType", "fSrc"].forEach((i) => { $$(i).value = ""; }); CBX.loc.reset(); CBX.proj.reset(); $$("flagToggle").classList.remove("on"); $$("photoToggle").classList.remove("on"); setRange("month"); if (rangeChanged) loadData(); else render(); toast("Filters reset"); });
 	$$("kpis").addEventListener("click", (ev) => { const b = ev.target.closest(".kpi.click"); if (!b) return; S.kpi = S.kpi === b.dataset.k ? null : b.dataset.k; if (S.kpi && S.tab !== "all" && S.tab !== "sus") S.tab = "sus"; S.anim = true; render(); });
-	$$("tabs").addEventListener("click", (ev) => { const b = ev.target.closest(".tab"); if (b) { S.tab = b.dataset.t; S.kpi = null; S.empView = null; S.exEmp = null; S.rpEmp = null; S.anim = true; render(); if (isRp() && !RPD && !rpLoading) loadReport(); return; } if (ev.target.closest("#legendBtn")) $$("legend").classList.toggle("show"); });
+	$$("tabs").addEventListener("click", (ev) => { const b = ev.target.closest(".tab"); if (b) { S.tab = b.dataset.t; S.kpi = null; S.empView = null; S.exEmp = null; S.rpEmp = null; S.anim = true; render(); if (isRp() && !RPD && !rpLoading) loadReport(); if (S.tab === "lc" && !LCD && !lcLoading) loadLive(); return; } if (ev.target.closest("#legendBtn")) $$("legend").classList.toggle("show"); });
 	// report period: Month-wise / Year-wise + month / year pickers (only shown on the two report tabs)
 	{
 		const t = new Date(); let h = "", y = "";
@@ -1117,6 +1186,8 @@ function jewPunchAuditBuild(page) {
 		toast("Preparing the Excel file…");
 	};
 	$$("view").addEventListener("click", (ev) => {
+		const lsw = ev.target.closest("[data-lc]"); if (lsw) { if (!lsw.disabled) toggleLive(lsw.dataset.lc); return; }
+		const lcc = ev.target.closest("[data-lcc]"); if (lcc) { S.lcChip = lcc.dataset.lcc; S.anim = false; render(); return; }
 		const rb = ev.target.closest("[data-rp]");
 		if (rb) {
 			const i = rb.dataset.rp.indexOf(":"), a = i < 0 ? rb.dataset.rp : rb.dataset.rp.slice(0, i), v2 = i < 0 ? "" : rb.dataset.rp.slice(i + 1);
@@ -1162,7 +1233,7 @@ function jewPunchAuditBuild(page) {
 		if (S.tab === "ex") { const b = rangeArgs(); b.filters = JSON.stringify({ q: S.q, dept: S.dept, loc: S.loc, proj: S.proj, chip: S.exChip }); window.open("/api/method/" + API + "export_exceptions?" + new URLSearchParams(b).toString(), "_blank"); } else if (S.tab === "np") { const b = rangeArgs(); b.filters = JSON.stringify({ q: S.q, dept: S.dept, loc: S.loc, proj: S.proj, only_login: S.npLogin ? 1 : 0, hide_covered: S.npHide ? 1 : 0 }); window.open("/api/method/" + API + "export_not_punched?" + new URLSearchParams(b).toString(), "_blank"); } else window.open("/api/method/" + API + "export_punch_audit?" + new URLSearchParams(a).toString(), "_blank");
 		toast("Preparing the Excel file…");
 	});
-	$$("refreshBtn").addEventListener("click", () => { if (isRp()) loadReport(true); else loadData(true); toast("Refreshed"); });
+	$$("refreshBtn").addEventListener("click", () => { if (S.tab === "lc") loadLive(true); else if (isRp()) loadReport(true); else loadData(true); toast("Refreshed"); });
 	$$("backBtn").addEventListener("click", () => { if (window.history.length > 1) window.history.back(); else frappe.set_route(""); });
 	$$("themeBtn").addEventListener("click", () => { const cur = host.getAttribute("data-theme"); localTheme = cur === "dark" ? "light" : "dark"; try { localStorage.setItem("pa-theme", localTheme); } catch (e) { /* ignore */ } applyTheme(); });
 	$$("retention").addEventListener("change", async (e) => { const days = parseInt(e.target.value, 10); const r = await callApi("save_settings", { retention_days: days }); if (r.ok) { DATA.retention_days = days; toast("Photos will be kept for " + days + " days"); } else toast("Could not save the setting"); });
@@ -1171,13 +1242,14 @@ function jewPunchAuditBuild(page) {
 		const sel = $$("retention"); sel.value = String(DATA.retention_days || 90);
 		sel.disabled = !!(DATA.viewer && DATA.viewer.scope === "team");   // only HR / Admin may change it (server enforces too)
 		const mode = DATA.liveness_mode || "off";
-		$$("liveMode").textContent = { off: "Off", shadow: "Shadow (score logged only)", enforce: "Enforce", active: "Active (blink / head-turn)" }[mode] || mode;
+		$$("liveMode").textContent = { off: "Off for the site · per person in the Live check tab", shadow: "Shadow (score logged only)", enforce: "Enforce", active: "Active (blink / head-turn)" }[mode] || mode;
 	}
 	buildLegend(); applyTheme();
 	if (isRp()) loadReport();
+	if (S.tab === "lc") loadLive();
 	loadData(true);
 	return { onShow() {
-		if (applyUrlTab()) { render(); if (isRp() && !rpLoading && (!RPD || RPD.period !== S.rp)) loadReport(); }
+		if (applyUrlTab()) { render(); if (isRp() && !rpLoading && (!RPD || RPD.period !== S.rp)) loadReport(); if (S.tab === "lc" && !LCD && !lcLoading) loadLive(); }
 		if (Date.now() - loadedAt > 120000) loadData(true);
 	} };
 }
