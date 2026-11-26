@@ -33,7 +33,41 @@ function jewPunchAuditBuild(page) {
 		+ ".rpm{display:grid;gap:1px;justify-items:center}.rpm b{font-family:var(--font-mono);font-size:12.5px;color:var(--text-primary)}.rpm span{font-size:10.5px;color:var(--text-muted);white-space:nowrap}"
 		+ "table.xt tbody tr[data-rp]{cursor:pointer}table.xt tbody tr[data-rp]:hover{background:var(--row-hover)}"
 		+ "table.xt td.chips .tag{margin:0 6px 4px 0}"
-		+ ".rpnote{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--text-muted)}";
+		+ ".rpnote{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--text-muted)}"
+		// face / location badges + WhatsApp button in the report's employee cell
+		+ ".nmw{display:flex;align-items:center;gap:10px;justify-content:space-between}.nmw>div{min-width:0}"
+		+ ".emp .stb{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px}.emp .stb .tag{font-size:10.5px;padding:2px 7px;gap:4px}"
+		+ ".wa{flex:none;display:grid;place-items:center;width:28px;height:28px;padding:0;border-radius:50%;border:1px solid rgba(37,211,102,.5);background:rgba(37,211,102,.10);color:#1DA851;cursor:pointer;transition:all .18s var(--ease)}"
+		+ ".wa:hover{background:#25D366;border-color:#25D366;color:#fff;transform:translateY(-1px)}.wa svg{width:15px;height:15px}"
+		+ ".wa.nomob{border-style:dashed}"
+		+ ".btn.wag{background:#25D366;border-color:#25D366;color:#fff;box-shadow:none}.btn.wag:hover{background:#1DA851;border-color:#1DA851;color:#fff}"
+		+ ".btn.wal{border-color:rgba(37,211,102,.55);color:#1DA851}.btn.wal:hover{border-color:#25D366;color:#1DA851;background:rgba(37,211,102,.08)}"
+		// popups: employee month (#epm) and WhatsApp message (#wam)
+		+ ".mdl{position:fixed;inset:0;z-index:1050;display:none;align-items:flex-start;justify-content:center;padding:4vh 16px;background:rgba(10,13,19,.52);overflow-y:auto;overscroll-behavior:contain}"
+		+ ".mdl.on{display:flex}#wam{z-index:1055}.mdl{--dux-list-max-h:none}.mdl .tscroll{max-height:none}"
+		+ ".mdl .box{position:relative;width:min(1100px,100%);background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:var(--r-xl);box-shadow:var(--shadow-pop);overflow:hidden;animation:mdlIn .22s var(--ease)}"
+		+ ".mdl.sm .box{width:min(540px,100%)}"
+		+ ".mdl .box::before{content:\"\";position:absolute;left:0;right:0;top:0;height:2px;background:var(--brand-grad);opacity:.7;z-index:2}"
+		+ "@keyframes mdlIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}"
+		+ ".mh{display:flex;align-items:center;gap:12px;padding:16px 18px;border-bottom:1px solid var(--border-subtle);flex-wrap:wrap}"
+		+ ".mh .who{flex:1;min-width:200px}.mh h2{margin:0;font-size:var(--fs-h3);font-weight:600;letter-spacing:-.02em;line-height:1.3}"
+		+ ".mh .acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap}"
+		+ ".mst{display:flex;gap:8px 18px;flex-wrap:wrap;align-items:center;padding:11px 18px;border-bottom:1px solid var(--border-subtle);background:var(--meta-bg);font-size:12.5px;color:var(--text-secondary)}"
+		+ ".mst .k{color:var(--text-muted)}.mst .tag{font-size:11px}"
+		+ ".mper{display:flex;align-items:center;gap:8px;padding:12px 18px 0}.mper b{font-size:var(--fs-sm);font-weight:600;min-width:120px;text-align:center}"
+		+ ".mper .ibtn{width:30px;height:30px}.mper .ibtn.nx svg{transform:rotate(180deg)}.mper .ibtn[disabled]{opacity:.35;pointer-events:none}"
+		+ ".mk{display:grid;grid-template-columns:repeat(auto-fit,minmax(94px,1fr));gap:8px;padding:12px 18px 14px;border-bottom:1px solid var(--border-subtle)}"
+		+ ".mk div{border:1px solid var(--border-subtle);border-radius:var(--r-md);padding:9px 11px;background:var(--surface-1);display:grid;gap:2px}"
+		+ ".mk span{font-size:11px;color:var(--text-muted)}.mk b{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:19px;font-weight:600;color:var(--cyan);line-height:1.2}"
+		+ ".mk b.err{color:var(--err)}.mk b.pending{color:var(--pending)}.mk b.ok{color:var(--ok)}.mk b.mut{color:var(--text-secondary)}"
+		+ ".mload{padding:46px 18px;text-align:center;color:var(--text-muted)}"
+		+ ".wf{display:grid;gap:14px;padding:16px 18px}.wf label{display:grid;gap:6px}"
+		+ ".wf .in{height:40px}.wf .hint{font-size:12px;color:var(--text-muted)}.wf .hint.err{color:var(--err)}"
+		+ ".wf textarea{width:100%;min-height:210px;resize:vertical;padding:10px 12px;border-radius:var(--r-md);border:1px solid var(--border-strong);background:var(--surface-1);color:var(--text-primary);font-size:13px;line-height:1.5;outline:0}"
+		+ ".wf textarea:focus,.wf .in:focus-within{border-color:var(--iris)}"
+		+ ".wf .chk{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text-secondary);cursor:pointer}.wf .chk input{width:15px;height:15px;accent-color:#25D366}"
+		+ ".mf{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid var(--border-subtle);flex-wrap:wrap}"
+		+ "@media(max-width:820px){.mdl{padding:0}.mdl .box,.mdl.sm .box{width:100%;min-height:100%;border-radius:0}}";
 
 	// ---- shell: hide Frappe's own page header, mount the Shadow DOM host
 	try { page.wrapper.find(".page-head").hide(); } catch (e) { /* ignore */ }
@@ -79,7 +113,8 @@ function jewPunchAuditBuild(page) {
 		+ ".sw.lcsw{min-width:78px;justify-content:flex-start}"
 		+ ".sw.lcsw[disabled]{opacity:.45;cursor:not-allowed}"
 		+ ".sw.lcsw.busy{opacity:.6;pointer-events:none}";
-	root.innerHTML = "<style>" + CSS + CSS_RP + CSS_LOC + "</style>" + HTML;
+	root.innerHTML = "<style>" + CSS + CSS_RP + CSS_LOC + "</style>" + HTML
+		+ '<div class="mdl" id="epm" aria-hidden="true"></div><div class="mdl sm" id="wam" aria-hidden="true"></div>';
 	const $$ = (id) => root.getElementById(id);
 	const qa = (s) => Array.from(root.querySelectorAll(s));
 
@@ -107,7 +142,8 @@ function jewPunchAuditBuild(page) {
 		info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.8v.1"/>',
 		userx: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.2-5.5 6.5-5.5s5.9 1.9 6.5 5.5"/><path d="M17 8.5l4 4M21 8.5l-4 4"/>',
 		report: '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5"/><path d="M9 13h7M9 17h5"/>',
-		leave: '<rect x="3.5" y="5" width="17" height="16" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="m9 15 2 2 4-4"/>'
+		leave: '<rect x="3.5" y="5" width="17" height="16" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="m9 15 2 2 4-4"/>',
+		wa: '<path d="M3.6 20.4l1.2-4.3A8.6 8.6 0 1 1 8 19.3z"/><path d="M9.1 8.3c-.3.7-.3 1.8.6 3.2.9 1.4 2.1 2.4 3.4 2.9 1 .4 1.8.2 2.3-.4l.3-.6-1.7-.9-.8.8c-.8-.3-1.7-1.1-2.1-2l.7-.8-.7-1.8z"/>'
 	};
 	const ic = (n, s) => '<svg viewBox="0 0 24 24" width="' + (s || 16) + '" height="' + (s || 16) + '" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' + (PATHS[n] || PATHS.info) + '</svg>';
 	const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -134,7 +170,7 @@ function jewPunchAuditBuild(page) {
 	let RPD = null, rpLoading = false; const rpCache = {};
 	let LCD = null, lcLoading = false;   // Live check tab (server: get_live_check / set_live_check)
 	const S = { range: "month", month: curMonth(), from: "", to: "", q: "", dept: "", loc: "", proj: "", type: "", src: "", dev: "", onlyFlag: false, onlyPhoto: false, tab: "mon", kpi: null, anim: true, empView: null, npLogin: true, npHide: false, exChip: "all", exView: "tbl", exEmp: null,
-		rp: "month", rpMonth: curMonth(), rpYear: String(new Date().getFullYear()), rpView: "reg", rpEmp: null, lvChip: "all", lvSt: "all", lvW: "", lvDate: "", lcChip: "all" };
+		rp: "month", rpMonth: curMonth(), rpYear: String(new Date().getFullYear()), rpView: "reg", rpEmp: null, rpChip: "all", lvChip: "all", lvSt: "all", lvW: "", lvDate: "", lcChip: "all" };
 	// Deep link (DUX portal cards): /desk/punch-audit?tab=rep (Attendance report) or ?tab=lv (Leave & on duty), optional &period=year
 	const TABS = ["mon", "np", "ex", "rep", "lv", "sus", "all", "dev", "emp", "lc"];
 	let urlTabSeen = "";
@@ -425,7 +461,7 @@ function jewPunchAuditBuild(page) {
 		const dates = Object.keys(byDay).sort().reverse();
 		const title = S.range === "month" ? monthLabel(S.month) : fmtDs(parseD(S.from)) + " – " + fmtDs(parseD(S.to));
 		const withPhoto = mine.filter((p) => p.photo).length;
-		const head = '<div class="empH"><button type="button" class="btn ghost sm" data-v="back">' + ic("chevron", 13) + 'Month summary</button><div class="thumb ini">' + esc(ini(e.name)) + '</div>'
+		const head = '<div class="empH"><button type="button" class="btn ghost sm" data-v="back">' + ic("chevron", 13) + 'Employee summary</button><div class="thumb ini">' + esc(ini(e.name)) + '</div>'
 			+ '<div class="emp"><b>' + esc(e.name) + '</b><span><span class="id" style="font-size:12px">' + esc(e.id) + '</span>' + (e.dept ? ' · ' + esc(e.dept) : "") + '</span></div><div class="sp"></div>'
 			+ '<span class="sub">' + dates.length + (dates.length === 1 ? " day" : " days") + ' · ' + mine.length + (mine.length === 1 ? " punch" : " punches") + ' · ' + withPhoto + (withPhoto === 1 ? " photo" : " photos") + '</span>'
 			+ '<button type="button" class="btn sm" data-v="table">' + ic("layers", 13) + 'All punches table</button></div>';
@@ -726,10 +762,26 @@ function jewPunchAuditBuild(page) {
 	const hrs = (m) => m ? Math.floor(m / 60) + ":" + pad(m % 60) : "";
 	const pdays = (c) => (c.p || 0) + (c.od || 0) + (c.hd || 0) / 2;
 	const rpLabel = () => RPD ? RPD.label : (S.rp === "year" ? S.rpYear : monthLabel(S.rpMonth));
-	function rpBase() {
+	function rpBase0() {
 		const q = S.q.trim().toLowerCase();
 		return ((RPD && RPD.employees) || []).filter((e) => (!q || (e.name || "").toLowerCase().includes(q) || (e.id || "").toLowerCase().includes(q)) && (!S.dept || e.dept === S.dept) && atLoc(e.id) && inProj(e.id));
 	}
+	// Attendance report chips: active employees who cannot Mark In yet (server: _setup_info / _setup_match)
+	const RP_SET = [["all", "Everyone"], ["face", "Face not registered"], ["fpend", "Face pending approval"], ["loc", "Location not assigned"]];
+	const noLoc = (e) => !(e.locs || []).length && !e.lopt;
+	const setupMatch = (e, k) => !k || k === "all" || (!!e.act && (k === "face" ? e.face === "none" : k === "fpend" ? e.face === "pending" : k === "loc" ? noLoc(e) : true));
+	const rpBase = () => S.tab === "rep" && S.rpChip !== "all" ? rpBase0().filter((e) => setupMatch(e, S.rpChip)) : rpBase0();
+	function setupTags(e) {
+		if (!e.act || !e.face) return "";
+		const t = [];
+		if (e.face === "none") t.push(tag("err", "Face not registered"));
+		else if (e.face === "pending") t.push(tag("pending", "Face pending"));
+		if (noLoc(e)) t.push(tag("err", "No location"));
+		return t.length ? '<span class="stb">' + t.join("") + '</span>' : "";
+	}
+	const waBtn = (e) => e.act ? '<button type="button" class="wa' + (e.mob ? "" : " nomob") + '" data-wa="' + esc(e.id) + '" title="' + esc(e.mob ? "WhatsApp message to " + e.name + " (" + e.mob + ")" : "WhatsApp message to " + e.name + " · no mobile number yet") + '" aria-label="Send WhatsApp message">' + ic("wa", 15) + '</button>' : "";
+	const nameBlock = (e) => '<div class="nmw"><div><b>' + esc(e.name) + '</b><span><span class="id" style="font-size:12px">' + esc(e.id) + '</span>' + (e.dept ? ' · ' + esc(e.dept) : "")
+		+ (e.since ? "" : ' · <span style="color:var(--pending)">no attendance yet</span>') + '</span>' + setupTags(e) + '</div>' + waBtn(e) + '</div>';
 	const rpEmpOf = (id) => ((RPD && RPD.employees) || []).find((e) => e.id === id) || null;
 	const rpChip = (code, x) => '<span class="xc c-' + (code || "none") + '" style="cursor:inherit">' + (code || "·") + (x && x.late ? '<i class="xd"></i>' : "") + '</span>';
 	function rpNote(x) {
@@ -756,6 +808,7 @@ function jewPunchAuditBuild(page) {
 		if (S.dept) out.push(pill("building", "Department", S.dept, "iris"));
 		if (S.proj) out.push(pill("box", "Project", S.proj, "iris"));
 		if (S.loc) out.push(pill("pin", "Assigned location", S.loc, "iris"));
+		if (S.tab === "rep" && S.rpChip !== "all") out.push(pill("filter", "Show", (RP_SET.find((x) => x[0] === S.rpChip) || [])[1], "pending"));
 		(extra || []).forEach((x) => out.push(x));
 		out.push(scopePill());
 		return out.join("");
@@ -769,7 +822,7 @@ function jewPunchAuditBuild(page) {
 			+ '<th>P</th><th>HD</th><th>L</th><th>OD</th><th>A</th></tr>';
 		const rows = list.map((e) => {
 			const cells = RPD.cells[e.id] || {}, c = e.c;
-			return '<tr data-rp="emp:' + esc(e.id) + '" tabindex="0"><td class="nm emp"><b>' + esc(e.name) + '</b><span><span class="id" style="font-size:12px">' + esc(e.id) + '</span>' + (e.dept ? ' · ' + esc(e.dept) : "") + '</span></td>'
+			return '<tr data-rp="emp:' + esc(e.id) + '" tabindex="0"><td class="nm emp">' + nameBlock(e) + '</td>'
 				+ days.map((d) => {
 					const x = cells[d]; if (!x || (!x.s && !x.in)) return '<td></td>';
 					return '<td title="' + esc(rpTip(d, x)) + '">' + rpChip(x.s, x) + (x.in || x.out ? '<span class="rio">' + (x.in || "—") + '</span><span class="rio' + (x.i ? " miss" : "") + '">' + (x.out || (d === td ? "…" : "—")) + '</span>' : "") + '</td>';
@@ -786,7 +839,7 @@ function jewPunchAuditBuild(page) {
 		const head = '<tr><th class="nm">Employee</th>' + ms.map((m) => '<th>' + MON[+m.slice(5, 7) - 1] + '</th>').join("") + '<th>Total</th></tr>';
 		const rows = list.map((e) => {
 			const mo = RPD.mo[e.id] || {};
-			return '<tr data-rp="emp:' + esc(e.id) + '" tabindex="0"><td class="nm emp"><b>' + esc(e.name) + '</b><span><span class="id" style="font-size:12px">' + esc(e.id) + '</span>' + (e.dept ? ' · ' + esc(e.dept) : "") + '</span></td>'
+			return '<tr data-rp="emp:' + esc(e.id) + '" tabindex="0"><td class="nm emp">' + nameBlock(e) + '</td>'
 				+ ms.map((m) => {
 					const c = mo[m]; if (!c || m > cur || !(c.p || c.hd || c.od || c.l || c.a)) return '<td></td>';
 					return '<td title="' + esc(monthLabel(m) + " · Present " + c.p + " · Half day " + c.hd + " · On duty " + c.od + " · Leave " + nfx(c.l) + " · Absent " + c.a + " · Late " + c.late) + '"><div class="rpm"><b>' + nfx(pdays(c)) + '</b>' + (sub(c) ? '<span>' + sub(c) + '</span>' : "") + '</div></td>';
@@ -809,15 +862,10 @@ function jewPunchAuditBuild(page) {
 		return '<div class="tscroll"><table class="dt xt"><thead><tr><th>Employee</th><th>Present</th><th>Half day</th><th>On duty</th><th>Leave</th><th>Absent</th><th>Holiday / off</th><th>Present days</th><th>Late</th><th>Early</th><th>Total hours</th><th>Avg / day</th></tr></thead><tbody>' + rows + tot + '</tbody></table></div>'
 			+ '<div class="xleg"><span>Present days = Present + On duty + ½ Half day</span><span>Absent includes past days with no punch, no leave and no on duty</span><span>Days before an employee’s first punch or attendance are not counted</span><span>Days are counted up to today</span></div>';
 	}
-	const rpEmpCell = (e) => '<td class="emp"><b>' + esc(e.name) + '</b><span><span class="id" style="font-size:12px">' + esc(e.id) + '</span> · ' + (e.dept ? esc(e.dept) : "No department")
-		+ (e.since ? "" : ' · <span style="color:var(--pending)">no attendance yet</span>') + '</span></td>';
+	const rpEmpCell = (e) => '<td class="emp" style="min-width:250px">' + nameBlock(e) + '</td>';
+	// one employee's month (day by day) or year (month by month) - shown in the employee popup (#epm)
 	function rpEmpDetail(e) {
-		const c = e.c, year = RPD.period === "year";
-		const head = '<div class="empH"><button type="button" class="btn ghost sm" data-rp="back">' + ic("chevron", 13) + (S.tab === "lv" ? "Leave & on duty" : "Attendance report") + '</button><div class="thumb ini">' + esc(ini(e.name)) + '</div>'
-			+ '<div class="emp"><b>' + esc(e.name) + '</b><span><span class="id" style="font-size:12px">' + esc(e.id) + '</span>' + (e.dept ? ' · ' + esc(e.dept) : "") + (e.desig ? ' · ' + esc(e.desig) : "")
-			+ (e.since ? ' · tracked from ' + esc(fmtDs(parseD(e.since)) + " " + parseD(e.since).getFullYear()) : ' · no punch or attendance yet') + '</span></div><div class="sp"></div>'
-			+ '<span class="sub">Present ' + c.p + ' · Half day ' + c.hd + ' · On duty ' + c.od + ' · Leave ' + nfx(c.l) + ' · Absent ' + c.a + ' · Late ' + c.late + '</span>'
-			+ '<button type="button" class="btn sm" data-rp="xls">' + ic("download", 13) + 'Excel for ' + esc(e.name.split(" ")[0]) + '</button></div>';
+		const year = RPD.period === "year";
 		const dash = '<span class="sub">—</span>';
 		let body;
 		if (year) {
@@ -840,19 +888,130 @@ function jewPunchAuditBuild(page) {
 		}
 		const recs = (RPD.records || []).filter((r) => r.emp === e.id);
 		const rl = recs.length ? '<div class="meta"><span class="a"><b>' + recs.length + '</b> leave, half day, on duty and late / early ' + (recs.length === 1 ? "entry" : "entries") + '</span><span class="b">' + esc(RPD.label) + '</span></div>' + lvTable(recs, true) : "";
-		return head + '<div class="meta"><span class="a"><b>' + esc(RPD.label) + '</b> · ' + (year ? "month by month" : "day by day") + '</span><span class="b">' + (year ? "Select a month to open it day by day" : "Mark IN = first IN punch of the day · Mark OUT = last OUT punch") + '</span></div>' + body + rl;
+		return '<div class="meta"><span class="a"><b>' + esc(RPD.label) + '</b> · ' + (year ? "month by month" : "day by day") + '</span><span class="b">' + (year ? "Select a month to open it day by day" : "Mark IN = first IN punch of the day · Mark OUT = last OUT punch") + '</span></div>' + body + rl;
 	}
 	function repView() {
 		if (!RPD) return rpWaiting("attendance report");
-		const year = RPD.period === "year", emp = S.rpEmp ? rpEmpOf(S.rpEmp) : null;
-		if (emp) return rpWrap(rpPills([pill("user", "Employee", emp.name, "iris")]), rpEmpDetail(emp));
-		const list = rpBase().slice().sort((a, b) => a.name.localeCompare(b.name)), view = S.rpView === "sum" ? "sum" : "reg";
+		const year = RPD.period === "year";
+		const list = rpBase().slice().sort((a, b) => a.name.localeCompare(b.name)), view = S.rpView === "sum" ? "sum" : "reg", base0 = rpBase0();
 		const bar = '<div class="xbar"><span class="xseg"><button type="button" class="' + (view === "reg" ? "on" : "") + '" data-rp="view:reg">' + (year ? "Month-wise" : "Mark in / out") + '</button><button type="button" class="' + (view === "sum" ? "on" : "") + '" data-rp="view:sum">Summary</button></span>'
-			+ '<span class="sp"></span><span class="rpnote">' + ic("info", 13) + (year ? "Present days per month · select an employee for details" : "Status, Mark IN and Mark OUT for every day · select an employee for day by day") + '</span></div>';
+			+ '<span class="sp"></span><span class="rpnote">' + ic("info", 13) + (year ? "Present days per month · select an employee for details" : "Status, Mark IN and Mark OUT for every day · select an employee for the month") + '</span></div>'
+			+ '<div class="xbar">' + RP_SET.map((x) => '<button type="button" class="xchip' + (S.rpChip === x[0] ? " on" : "") + '" data-rp="chip:' + x[0] + '">' + x[1] + ' <span class="n">' + (x[0] === "all" ? base0.length : base0.filter((e) => setupMatch(e, x[0])).length) + '</span></button>').join("")
+			+ '<span class="sp"></span><span class="rpnote"><span class="wa" style="width:22px;height:22px;cursor:default">' + ic("wa", 12) + '</span>Send a WhatsApp message to the employee</span></div>';
 		const upto = RPD.today < RPD.to ? RPD.today : RPD.to;
 		const meta = '<div class="meta"><span class="a"><b>' + list.length + '</b> ' + (list.length === 1 ? "employee" : "employees") + ' · ' + esc(RPD.label) + '</span><span class="b">Counted up to ' + esc(fmtDs(parseD(upto)) + " " + parseD(upto).getFullYear()) + ' · Export to Excel gives the full workbook</span></div>';
-		const body = !list.length ? emptyBody("No employees in this view", "Clear the employee or department filter, or pick another period.") : view === "sum" ? rpSummary(list) : year ? rpYearGrid(list) : rpRegister(list);
+		const body = !list.length ? (S.rpChip !== "all" ? emptyBody("Nobody in this view", "No active employee here is missing this. Pick Everyone, or clear the employee, project or department filter.")
+			: emptyBody("No employees in this view", "Clear the employee or department filter, or pick another period.")) : view === "sum" ? rpSummary(list) : year ? rpYearGrid(list) : rpRegister(list);
 		return rpWrap(rpPills(), bar + meta + body);
+	}
+	// ---- employee popup: the month (or year) of one employee - status, Mark IN / OUT, leave, late, early - with a summary
+	let epmLast = null;   // the employee shown while the next month loads
+	function epmHtml(e) {
+		const c = e.c || {}, year = RPD.period === "year", td = todayStr();
+		const faceTag = !e.face ? "" : e.face === "ok" ? tag("ok", "Approved") : e.face === "pending" ? tag("pending", "Pending approval") : tag("err", "Not registered");
+		const locTxt = (e.locs || []).length ? esc(e.locs.join(", ")) : e.lopt ? tag("draft", "Not required") : tag("err", "Not assigned");
+		const head = '<div class="mh"><div class="thumb ini">' + esc(ini(e.name)) + '</div><div class="who"><h2>' + esc(e.name) + '</h2><div class="sub"><span class="id" style="font-size:12px">' + esc(e.id) + '</span>'
+			+ [e.dept, e.desig, e.proj].filter(Boolean).map((x) => ' · ' + esc(x)).join("") + (e.act === 0 ? ' · <span style="color:var(--err)">inactive</span>' : "") + '</div></div>'
+			+ '<div class="acts">' + (e.act ? '<button type="button" class="btn sm wal" data-wa="' + esc(e.id) + '">' + ic("wa", 14) + 'WhatsApp</button>' : "")
+			+ '<button type="button" class="btn sm" data-rp="xls">' + ic("download", 13) + 'Excel</button><button type="button" class="ibtn" data-epm="close" aria-label="Close" title="Close (Esc)">' + ic("close", 16) + '</button></div></div>';
+		const st = '<div class="mst">' + (e.face ? '<span><span class="k">Face:</span> ' + faceTag + (e.face === "none" && e.act ? ' <span class="sub">' + (e.sr ? "can self-register in the app" : "to be registered by Dept Head / HR") + '</span>' : "") + '</span>' : "")
+			+ (e.face ? '<span><span class="k">Location:</span> ' + locTxt + '</span>' : "")
+			+ (e.head ? '<span><span class="k">Dept head:</span> ' + esc(e.head) + '</span>' : "")
+			+ (e.act ? '<span><span class="k">Mobile:</span> ' + (e.mob ? '<span class="dtm">' + esc(e.mob) + '</span>' : '<span class="sub">not saved</span>') + '</span>' : "")
+			+ '<span><span class="k">Tracked from:</span> ' + (e.since ? esc(fmtDs(parseD(e.since)) + " " + parseD(e.since).getFullYear()) : "no punch or attendance yet") + '</span></div>';
+		const cm = curMonth(), ym = RPD.from.slice(0, 7);
+		const per = '<div class="mper">' + (year ? '<b style="text-align:left">Year ' + esc(RPD.label) + '</b>'
+			: '<button type="button" class="ibtn" data-epm="mon:-1" title="Previous month" aria-label="Previous month">' + ic("chevron", 14) + '</button><b>' + esc(RPD.label) + '</b><button type="button" class="ibtn nx" data-epm="mon:1" title="Next month" aria-label="Next month"' + (ym >= cm ? " disabled" : "") + '>' + ic("chevron", 14) + '</button>')
+			+ '<span class="sub" style="margin-left:6px">' + (RPD.today < RPD.to ? "counted up to today, " + esc(fmtDs(parseD(td))) : "") + '</span></div>';
+		const k = (l, v, cls) => '<div><span>' + l + '</span><b class="' + (cls || "") + '">' + v + '</b></div>';
+		const kp = '<div class="mk">' + k("Present days", nfx(pdays(c)), "") + k("Present", c.p || 0, "ok") + k("Half day", c.hd || 0, "pending") + k("On duty", c.od || 0, "")
+			+ k("Leave", nfx(c.l || 0), "mut") + k("Absent", c.a || 0, "err") + k("Late days", c.late || 0, "err") + k("Early going", c.early || 0, "pending")
+			+ k("Total hours", hrs(c.mins) || "0:00", "mut") + k("Avg / day", c.md ? hrs(Math.round(c.mins / c.md)) : "—", "mut") + '</div>';
+		return head + st + per + kp + rpEmpDetail(e);
+	}
+	function renderEmpModal() {
+		const m = $$("epm"), e = isRp() && S.rpEmp && RPD ? rpEmpOf(S.rpEmp) : null;
+		if (e) epmLast = e;
+		if (!S.rpEmp || !isRp() || (!e && !(rpLoading && epmLast && epmLast.id === S.rpEmp))) {
+			if (S.rpEmp && RPD && !e && isRp()) { S.rpEmp = null; toast("No record for this employee in " + RPD.label); }
+			if (m.classList.contains("on")) { m.classList.remove("on"); m.setAttribute("aria-hidden", "true"); m.innerHTML = ""; }
+			return;
+		}
+		const top = m.scrollTop, was = m.classList.contains("on");
+		m.innerHTML = '<div class="box" role="dialog" aria-modal="true" aria-label="' + esc((e || epmLast).name) + '">' + (e ? epmHtml(e)
+			: '<div class="mh"><div class="thumb ini">' + esc(ini(epmLast.name)) + '</div><div class="who"><h2>' + esc(epmLast.name) + '</h2></div><div class="acts"><button type="button" class="ibtn" data-epm="close" aria-label="Close">' + ic("close", 16) + '</button></div></div><div class="mload"><span class="shim">Loading ' + esc(rpLabel()) + '…</span></div>') + '</div>';
+		m.classList.add("on"); m.setAttribute("aria-hidden", "false");
+		if (was) m.scrollTop = top;
+	}
+	function closeEmpModal() { S.rpEmp = null; renderEmpModal(); }
+	// ---- WhatsApp message (opens WhatsApp with the text filled in - the user presses Send there)
+	const WA_KINDS = [["in", "Mark In not done today"], ["out", "Reminder: Mark Out today"], ["missout", "Mark Out missed"], ["face", "Face not registered"], ["fpend", "Face approval pending"], ["loc", "Location not assigned"], ["custom", "My own message"]];
+	let waEmp = null;
+	const normMob = (v) => { let d = String(v || "").replace(/\D/g, ""); if (d.length === 12 && d.startsWith("91")) d = d.slice(2); else if (d.length === 11 && d.startsWith("0")) d = d.slice(1); return /^[6-9]\d{9}$/.test(d) ? d : ""; };
+	function waState(e) {
+		const cells = (RPD && RPD.period === "month" && RPD.cells[e.id]) || {}, td = todayStr(), x = cells[td] || {};
+		const miss = Object.keys(cells).filter((d) => d < td && cells[d].i).sort().pop() || "";
+		let k = "in";
+		if (e.face === "none") k = "face"; else if (e.face === "pending") k = "fpend"; else if (noLoc(e)) k = "loc";
+		else if (x.in && !x.out) k = "out";                                   // punched in today: remind to punch out
+		else if (!x.in && ["L", "OD", "H", "WO"].includes(x.s) && miss) k = "missout";   // off today: the last missed Mark Out
+		else if (x.in && x.out && miss) k = "missout";
+		return { k: k, today: x, miss: miss };
+	}
+	function waText(e, k, s) {
+		const first = String(e.name || "").replace(/\(.*?\)/g, "").trim().split(/\s+/)[0] || e.name;
+		const me = (window.frappe && frappe.session && frappe.session.user_fullname) || "HR";
+		const head = e.head ? "apne Dept Head (" + e.head + ")" : "apne Dept Head / HR";
+		const dd = (d) => { const x = parseD(d); return x.getDate() + " " + MON[x.getMonth()]; };
+		const locLine = noLoc(e) ? "\n\nSaath hi aapki attendance location bhi abhi assign nahi hai. Location " + head + " se assign karwayein." : "";
+		const T = {
+			in: "Aaj (" + dd(todayStr()) + ") JEW HRMS app me aapka Mark In nahi hua hai. Kripya app kholkar Mark In karein.\n\nAgar app me koi dikkat aa rahi hai to hume batayein.",
+			out: (s.today.in ? "Aaj aapne " + s.today.in + " par Mark In kiya hai. " : "") + "Kaam khatam hone par JEW HRMS app me Mark Out karna na bhoolein.",
+			missout: (s.miss ? dd(s.miss) + " ko" : "Pichhle din") + " aapne Mark In kiya tha lekin Mark Out nahi kiya. Kripya roz kaam khatam hone par JEW HRMS app me Mark Out zaroor karein, warna us din ki attendance adhoori rehti hai.",
+			face: "JEW HRMS app me aapka face abhi register nahi hua hai, isliye aap Mark In / Mark Out nahi kar pa rahe hain.\n\n"
+				+ (e.sr ? "Kripya app kholkar Face Registration karein (achhi roshni me, seedha camera ki taraf dekhkar). Approval ke baad aap attendance laga payenge."
+					: "Kripya " + head + " se app me apna face register karwayein. Uske baad aap attendance laga payenge.") + locLine,
+			fpend: "Aapka face JEW HRMS app me register ho gaya hai aur abhi approval ke liye pending hai. Approve hote hi aap Mark In / Mark Out kar payenge." + locLine,
+			loc: "JEW HRMS app me aapki attendance location abhi assign nahi hai, isliye Mark In nahi ho pa raha hai. Kripya " + head + " se location assign karwayein.",
+			custom: ""
+		};
+		return "Namaste " + first + " ji,\n\n" + (T[k] || "") + "\n\n- " + me;
+	}
+	function openWa(id) {
+		const e = rpEmpOf(id); if (!e) return; waEmp = id;
+		const s = waState(e), m = $$("wam");
+		m.innerHTML = '<div class="box" role="dialog" aria-modal="true" aria-label="WhatsApp message"><div class="mh"><span class="wa" style="width:36px;height:36px;cursor:default">' + ic("wa", 18) + '</span><div class="who"><h2>WhatsApp message</h2><div class="sub">to ' + esc(e.name) + ' · <span class="id" style="font-size:12px">' + esc(e.id) + '</span></div></div>'
+			+ '<div class="acts"><button type="button" class="ibtn" data-wm="close" aria-label="Close" title="Close (Esc)">' + ic("close", 16) + '</button></div></div>'
+			+ '<div class="wf"><label><span class="lbl">Mobile number</span><div class="in"><span class="sub" style="font-family:var(--font-mono)">+91</span><input id="waNum" type="tel" inputmode="numeric" maxlength="18"placeholder="10-digit mobile number" value="' + esc(e.mob || "") + '"></div>'
+			+ '<span class="hint" id="waHint">' + (e.mob ? "From the employee record." : "No mobile number on the employee record. Type it once - it will be saved on the employee.") + '</span></label>'
+			+ '<label class="chk" id="waSaveRow" style="display:none"><input type="checkbox" id="waSave" checked>Save this number on the employee record</label>'
+			+ '<label><span class="lbl">Message about</span><div class="in"><select id="waKind">' + WA_KINDS.map((x) => '<option value="' + x[0] + '"' + (x[0] === s.k ? " selected" : "") + '>' + x[1] + '</option>').join("") + '</select><span class="chev">' + ic("chevron", 14) + '</span></div></label>'
+			+ '<label><span class="lbl">Message · you can edit it</span><textarea id="waTxt">' + esc(waText(e, s.k, s)) + '</textarea></label></div>'
+			+ '<div class="mf"><button type="button" class="btn" data-wm="close">Cancel</button><button type="button" class="btn wag" data-wm="go">' + ic("wa", 15) + 'Open WhatsApp</button></div></div>';
+		m.classList.add("on"); m.setAttribute("aria-hidden", "false");
+		const n = root.getElementById("waNum"); if (n && !e.mob) setTimeout(() => n.focus(), 30);
+	}
+	function closeWa() { waEmp = null; const m = $$("wam"); m.classList.remove("on"); m.setAttribute("aria-hidden", "true"); m.innerHTML = ""; }
+	function waSync() {
+		const e = rpEmpOf(waEmp); if (!e) return;
+		const raw = root.getElementById("waNum").value, num = normMob(raw), h = root.getElementById("waHint");
+		root.getElementById("waSaveRow").style.display = num && num !== e.mob ? "" : "none";
+		h.classList.toggle("err", !!raw.trim() && !num);
+		h.textContent = !raw.trim() ? "No mobile number on the employee record. Type it once - it will be saved on the employee." : !num ? "Enter a valid 10-digit mobile number." : num === e.mob ? "From the employee record." : e.mob ? "Different from the saved number (" + e.mob + ")." : "New number.";
+	}
+	function waGo() {
+		const e = rpEmpOf(waEmp); if (!e) { closeWa(); return; }
+		const num = normMob(root.getElementById("waNum").value), txt = root.getElementById("waTxt").value.trim();
+		if (!num) { waSync(); root.getElementById("waHint").classList.add("err"); root.getElementById("waNum").focus(); toast("Enter a 10-digit mobile number"); return; }
+		if (!txt) { root.getElementById("waTxt").focus(); toast("Write a message first"); return; }
+		window.open("https://wa.me/91" + num + "?text=" + encodeURIComponent(txt), "_blank", "noopener");
+		const save = num !== e.mob && root.getElementById("waSave").checked;
+		closeWa();
+		if (save) callApi("save_employee_mobile", { employee: e.id, mobile: num }).then((r) => {
+			if (r.ok && r.data) { ((RPD && RPD.employees) || []).forEach((x) => { if (x.id === e.id) x.mob = r.data.mob; }); Object.values(rpCache).forEach((c) => (c.data.employees || []).forEach((x) => { if (x.id === e.id) x.mob = r.data.mob; })); toast("WhatsApp opened · number saved for " + e.name.split(" ")[0]); render(); }
+			else toast("WhatsApp opened · could not save the number");
+		});
+		else toast("WhatsApp opened - press Send there");
 	}
 	// Leave & on duty: leave applications, half days (half-day leave / duty, or a half day marked on attendance) and on-duty requests
 	const LV_CHIPS = [["all", "All"], ["leave", "Leave"], ["half", "Half day"], ["od", "On duty"], ["late", "Late coming"], ["early", "Early going"]];
@@ -868,7 +1027,7 @@ function jewPunchAuditBuild(page) {
 		|| (chip === "late" && r.kind === "Late coming") || (chip === "early" && r.kind === "Early going");
 	function lvBase() {
 		if (!RPD) return [];
-		const ok = new Set(rpBase().map((e) => e.id)), d = lvDayOf();
+		const ok = new Set(rpBase0().map((e) => e.id)), d = lvDayOf();
 		return (RPD.records || []).filter((r) => ok.has(r.emp) && (!d || (r.from <= d && d <= r.to)));
 	}
 	function lvGo(ym) {
@@ -892,8 +1051,6 @@ function jewPunchAuditBuild(page) {
 	}
 	function lvView() {
 		if (!RPD) return rpWaiting("leave and on-duty list");
-		const emp = S.rpEmp ? rpEmpOf(S.rpEmp) : null;
-		if (emp) return rpWrap(rpPills([pill("user", "Employee", emp.name, "iris")]), rpEmpDetail(emp));
 		const base = lvBase(), list = lvList(), extra = [];
 		if (S.lvChip !== "all") extra.push(pill("filter", "Show", (LV_CHIPS.find((x) => x[0] === S.lvChip) || [])[1], "pending"));
 		if (S.lvSt !== "all") extra.push(pill("filter", "Status", (LV_ST.find((x) => x[0] === S.lvSt) || [])[1], "pending"));
@@ -1015,13 +1172,13 @@ function jewPunchAuditBuild(page) {
 		const list = baseList(); kpiBlock(list); $$("kpis").classList.remove("k4"); if (S.tab === "np" && !loading && !loadError) npKpiBlock(); else if (S.tab === "ex" && !loading && !loadError && EXD) exKpiBlock();
 		else if (S.tab === "rep" && RPD) rpKpiBlock(); else if (S.tab === "lv" && RPD) lvKpiBlock(); else if (isRp()) { $$("kpis").innerHTML = ""; $$("lead").innerHTML = rpLoading ? "Building the report for " + esc(rpLabel()) + "…" : ""; }
 		else if (S.tab === "lc") { if (LCD && LCD.ready) lcKpiBlock(); else { $$("kpis").innerHTML = ""; $$("lead").innerHTML = lcLoading ? "Reading the live check list…" : ""; } }
-		syncRpControls();
+		syncRpControls(); renderEmpModal();
 		const flaggedList = list.filter((p) => p.flagged);
 		let tabList = S.tab === "sus" ? flaggedList.slice().sort((a, b) => b.sev - a.sev) : (S.onlyFlag ? flaggedList : list);
 		if (S.kpi === "flag") tabList = flaggedList; if (S.kpi === "shared") tabList = list.filter(isShared); if (S.kpi === "drift") tabList = list.filter(isDrift);
 		const devCount = new Set(list.filter((p) => p.dev).map((p) => p.dev)).size, empCount = new Set(list.map((p) => p.employee)).size, npBadge = NPD ? npStats().missing.length : "…", exBadge = EXD ? exBase().filter((e) => e.c.late_punch || e.c.early_punch || e.c.inc || e.c.pend).length : "…";
 		$$("tabs").innerHTML =
-			'<button class="tab' + (S.tab === "mon" ? " on" : "") + '" data-t="mon">' + ic("calendar", 14) + 'Month summary <span class="badge mono">' + empCount + '</span></button>'
+			'<button class="tab' + (S.tab === "mon" ? " on" : "") + '" data-t="mon">' + ic("calendar", 14) + 'Employee summary <span class="badge mono">' + empCount + '</span></button>'
 			+ '<button class="tab' + (S.tab === "np" ? " on" : "") + '" data-t="np">' + ic("userx", 14) + 'Not punched <span class="badge mono">' + npBadge + '</span></button>'
 			+ '<button class="tab' + (S.tab === "ex" ? " on" : "") + '" data-t="ex">' + ic("layers", 14) + 'Exceptions <span class="badge mono">' + exBadge + '</span></button>'
 			+ '<button class="tab' + (S.tab === "rep" ? " on" : "") + '" data-t="rep">' + ic("report", 14) + 'Attendance report <span class="badge mono">' + (RPD ? rpBase().length : "…") + '</span></button>'
@@ -1154,7 +1311,7 @@ function jewPunchAuditBuild(page) {
 	[["fDept", "dept"], ["fType", "type"], ["fSrc", "src"]].forEach(([id, k]) => $$(id).addEventListener("change", (e) => { S[k] = e.target.value; render(); }));
 	$$("flagToggle").addEventListener("click", () => { S.onlyFlag = !S.onlyFlag; $$("flagToggle").classList.toggle("on", S.onlyFlag); render(); });
 	$$("photoToggle").addEventListener("click", () => { S.onlyPhoto = !S.onlyPhoto; $$("photoToggle").classList.toggle("on", S.onlyPhoto); render(); });
-	$$("resetBtn").addEventListener("click", () => { const rangeChanged = S.range !== "month" || S.month !== curMonth(); S.month = curMonth(); Object.assign(S, { q: "", dept: "", loc: "", proj: "", type: "", src: "", dev: "", onlyFlag: false, onlyPhoto: false, kpi: null, anim: true, empView: null, npLogin: true, npHide: false, exChip: "all", exView: "tbl", exEmp: null, rpEmp: null, lvChip: "all", lvSt: "all", lvW: "", lcChip: "all" }); ["fQ", "fDev", "fDept", "fType", "fSrc"].forEach((i) => { $$(i).value = ""; }); CBX.loc.reset(); CBX.proj.reset(); $$("flagToggle").classList.remove("on"); $$("photoToggle").classList.remove("on"); setRange("month"); if (rangeChanged) loadData(); else render(); toast("Filters reset"); });
+	$$("resetBtn").addEventListener("click", () => { const rangeChanged = S.range !== "month" || S.month !== curMonth(); S.month = curMonth(); Object.assign(S, { q: "", dept: "", loc: "", proj: "", type: "", src: "", dev: "", onlyFlag: false, onlyPhoto: false, kpi: null, anim: true, empView: null, npLogin: true, npHide: false, exChip: "all", exView: "tbl", exEmp: null, rpEmp: null, lvChip: "all", lvSt: "all", lvW: "", lcChip: "all", rpChip: "all" }); ["fQ", "fDev", "fDept", "fType", "fSrc"].forEach((i) => { $$(i).value = ""; }); CBX.loc.reset(); CBX.proj.reset(); $$("flagToggle").classList.remove("on"); $$("photoToggle").classList.remove("on"); setRange("month"); if (rangeChanged) loadData(); else render(); toast("Filters reset"); });
 	$$("kpis").addEventListener("click", (ev) => { const b = ev.target.closest(".kpi.click"); if (!b) return; S.kpi = S.kpi === b.dataset.k ? null : b.dataset.k; if (S.kpi && S.tab !== "all" && S.tab !== "sus") S.tab = "sus"; S.anim = true; render(); });
 	$$("tabs").addEventListener("click", (ev) => { const b = ev.target.closest(".tab"); if (b) { S.tab = b.dataset.t; S.kpi = null; S.empView = null; S.exEmp = null; S.rpEmp = null; S.anim = true; render(); if (isRp() && !RPD && !rpLoading) loadReport(); if (S.tab === "lc" && !LCD && !lcLoading) loadLive(); return; } if (ev.target.closest("#legendBtn")) $$("legend").classList.toggle("show"); });
 	// report period: Month-wise / Year-wise + month / year pickers (only shown on the two report tabs)
@@ -1181,21 +1338,23 @@ function jewPunchAuditBuild(page) {
 	$$("rpMonth").addEventListener("change", (e) => { S.rpMonth = e.target.value; S.anim = true; loadReport(); });
 	$$("rpYear").addEventListener("change", (e) => { S.rpYear = e.target.value; S.anim = true; loadReport(); });
 	const rpExport = (only) => {
-		const b = rpArgs(); b.view = S.tab === "lv" ? "lv" : "att"; b.filters = JSON.stringify({ q: S.q, dept: S.dept, loc: S.loc, proj: S.proj, chip: S.lvChip, st: S.lvSt, emp: only || "", day: S.tab === "lv" && !only ? lvDayOf() : "" });
+		const b = rpArgs(); b.view = S.tab === "lv" ? "lv" : "att"; b.filters = JSON.stringify({ q: S.q, dept: S.dept, loc: S.loc, proj: S.proj, chip: S.lvChip, st: S.lvSt, emp: only || "", day: S.tab === "lv" && !only ? lvDayOf() : "", setup: S.tab === "rep" && !only ? S.rpChip : "" });
 		window.open("/api/method/" + API + "export_attendance_report?" + new URLSearchParams(b).toString(), "_blank");
 		toast("Preparing the Excel file…");
 	};
+	// report rows / chips and the employee popup share these actions
+	function rpAction(rb) {
+		const i = rb.dataset.rp.indexOf(":"), a = i < 0 ? rb.dataset.rp : rb.dataset.rp.slice(0, i), v2 = i < 0 ? "" : rb.dataset.rp.slice(i + 1);
+		if (a === "xls") { rpExport(S.rpEmp); return; }
+		if (a === "month") { S.rp = "month"; S.rpMonth = v2; S.anim = true; loadReport(); return; }   // from the popup's year view: that month, day by day
+		if (a === "view") S.rpView = v2; else if (a === "chip") S.rpChip = v2; else if (a === "emp") S.rpEmp = v2;
+		S.anim = false; render();
+	}
 	$$("view").addEventListener("click", (ev) => {
+		const wb = ev.target.closest("[data-wa]"); if (wb) { openWa(wb.dataset.wa); return; }
 		const lsw = ev.target.closest("[data-lc]"); if (lsw) { if (!lsw.disabled) toggleLive(lsw.dataset.lc); return; }
 		const lcc = ev.target.closest("[data-lcc]"); if (lcc) { S.lcChip = lcc.dataset.lcc; S.anim = false; render(); return; }
-		const rb = ev.target.closest("[data-rp]");
-		if (rb) {
-			const i = rb.dataset.rp.indexOf(":"), a = i < 0 ? rb.dataset.rp : rb.dataset.rp.slice(0, i), v2 = i < 0 ? "" : rb.dataset.rp.slice(i + 1);
-			if (a === "xls") { rpExport(S.rpEmp); return; }
-			if (a === "month") { S.rp = "month"; S.rpMonth = v2; S.anim = true; loadReport(); $$("tabs").scrollIntoView({ behavior: "smooth", block: "start" }); return; }
-			if (a === "view") S.rpView = v2; else if (a === "back") S.rpEmp = null; else if (a === "emp") S.rpEmp = v2;
-			S.anim = false; render(); if (a === "emp" || a === "back") $$("tabs").scrollIntoView({ behavior: "smooth", block: "start" }); return;
-		}
+		const rb = ev.target.closest("[data-rp]"); if (rb) { rpAction(rb); return; }
 		const lb = ev.target.closest("[data-lv]"); if (lb) { const p = lb.dataset.lv.split(":"); if (p[0] === "chip") S.lvChip = p[1]; else if (p[0] === "st") S.lvSt = p[1]; S.anim = false; render(); return; }
 		const xb = ev.target.closest("[data-ex]"); if (xb) { const i = xb.dataset.ex.indexOf(":"), a = i < 0 ? xb.dataset.ex : xb.dataset.ex.slice(0, i), v2 = i < 0 ? "" : xb.dataset.ex.slice(i + 1); if (a === "chip") S.exChip = v2; else if (a === "view") S.exView = v2; else if (a === "back") S.exEmp = null; else if (a === "emp") { S.exEmp = v2; if (exOneDay()) { S.month = curMonth(); setRange("month"); loadData(); return; } } S.anim = false; render(); if (a === "emp" || a === "back") $$("tabs").scrollIntoView({ behavior: "smooth", block: "start" }); return; }
 		const nb = ev.target.closest("[data-np]"); if (nb) { const k = nb.dataset.np; if (k === "today") { setRange("today"); loadData(); return; } if (k === "login") S.npLogin = !S.npLogin; else if (k === "hide") S.npHide = !S.npHide; S.anim = false; render(); return; }
@@ -1212,7 +1371,34 @@ function jewPunchAuditBuild(page) {
 	$$("view").addEventListener("keydown", (ev) => { if (ev.key === "Enter") { const rr = ev.target.closest("tr[data-rp]"); if (rr) { rr.click(); return; } const r = ev.target.closest("tbody tr[data-id]"); if (r) openDrawer(r.dataset.id); const m = ev.target.closest("tr.mrow"); if (m) m.click(); const xr = ev.target.closest("[data-ex]"); if (xr) xr.click(); const h = ev.target.closest(".dhalf[data-id]"); if (h) openDrawer(h.dataset.id); } });
 	$$("scrim").addEventListener("click", closeDrawer);
 	$$("lbx").addEventListener("click", closeLightbox);
-	document.addEventListener("keydown", (ev) => { if (ev.key !== "Escape") return; if ($$("lbx").classList.contains("on")) closeLightbox(); else if (openId) closeDrawer(); });
+	document.addEventListener("keydown", (ev) => { if (ev.key !== "Escape") return; if ($$("lbx").classList.contains("on")) closeLightbox(); else if (waEmp) closeWa(); else if (S.rpEmp && $$("epm").classList.contains("on")) closeEmpModal(); else if (openId) closeDrawer(); });
+	// employee popup: close (button / click outside), previous / next month, WhatsApp, Excel, a month of the year view
+	$$("epm").addEventListener("click", (ev) => {
+		if (ev.target === $$("epm")) { closeEmpModal(); return; }
+		const wb = ev.target.closest("[data-wa]"); if (wb) { openWa(wb.dataset.wa); return; }
+		const pb = ev.target.closest("[data-epm]");
+		if (pb) {
+			const a = pb.dataset.epm;
+			if (a === "close") { closeEmpModal(); return; }
+			if (a.startsWith("mon:")) {
+				const d = parseD(S.rpMonth + "-01"); d.setMonth(d.getMonth() + parseInt(a.slice(4), 10));
+				const ym = d.getFullYear() + "-" + pad(d.getMonth() + 1); if (ym > curMonth()) return;
+				S.rp = "month"; S.rpMonth = ym; S.anim = true; loadReport(); return;
+			}
+		}
+		const rb = ev.target.closest("[data-rp]"); if (rb) rpAction(rb);
+	});
+	$$("wam").addEventListener("click", (ev) => {
+		if (ev.target === $$("wam")) { closeWa(); return; }
+		const b = ev.target.closest("[data-wm]"); if (!b) return;
+		if (b.dataset.wm === "close") closeWa(); else if (b.dataset.wm === "go") waGo();
+	});
+	$$("wam").addEventListener("input", (ev) => { if (ev.target.id === "waNum") waSync(); });
+	$$("wam").addEventListener("change", (ev) => {
+		if (ev.target.id !== "waKind") return;
+		const e = rpEmpOf(waEmp); if (!e) return;
+		const t = root.getElementById("waTxt"); t.value = waText(e, ev.target.value, waState(e)); if (ev.target.value === "custom") { t.focus(); t.setSelectionRange(t.value.indexOf("\n\n") + 2, t.value.indexOf("\n\n") + 2); }
+	});
 	$$("drawer").addEventListener("click", async (ev) => {
 		if (ev.target.closest("[data-close]")) { closeDrawer(); return; }
 		const zi = ev.target.closest("img[data-zoom]"); if (zi) { openLightbox(zi.src); return; }

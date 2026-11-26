@@ -1712,6 +1712,11 @@ def _report(period, f, t, label):
 		                "cx": 1 if k == "ok" and le.cancel.startswith("Pending") else 0,
 		                "why": str(le.reason or "").strip()[:300], "on": str(getdate(le.creation))})
 	res["records"] = sorted((r for r in records if r["emp"] in keep), key=lambda r: (r["from"], r["id"]), reverse=True)
+	# face / location / mobile for the report's "Face not registered" / "Location not assigned" chips, the WhatsApp button
+	# and the employee popup
+	info = _setup_info([e["id"] for e in res["employees"]])
+	for e in res["employees"]:
+		e.update(info.get(e["id"]) or {})
 	return res
 
 
@@ -1784,8 +1789,9 @@ def _cell_note(c):
 
 RP_SUM_HEAD = ["Employee ID", "Employee", "Department", "Designation", "Tracked from", "Present", "Half day", "On duty", "Leave days", "Absent",
                "of which no record", "Holiday / week off", "Present days (P + OD + ½ HD)", "Late days", "Early going days", "IN without OUT",
-               "Total hours", "Avg hours / day"]
-RP_SUM_W = [14, 28, 20, 22, 12, 9, 9, 9, 10, 9, 11, 11, 14, 9, 11, 11, 11, 11]
+               "Total hours", "Avg hours / day", "Face", "Assigned location"]
+RP_SUM_W = [14, 28, 20, 22, 12, 9, 9, 9, 10, 9, 11, 11, 14, 9, 11, 11, 11, 11, 16, 26]
+FACE_TXT = {"ok": "Approved", "pending": "Pending approval", "none": "Not registered"}
 LV_HEAD = ["Type", "Employee ID", "Employee", "Department", "Leave / duty / late-early detail", "From", "To", "Days", "Half day", "Half",
            "Status", "Reason / details", "Applied on", "Reference"]
 LV_W = [11, 14, 28, 20, 20, 12, 12, 7, 10, 12, 26, 44, 12, 22]
@@ -1795,7 +1801,9 @@ LE_KINDS = ("Late coming", "Early going")
 def _sum_row(e, c):
 	return [e["id"], e["name"], e["dept"], e["desig"], getdate(e["since"]) if e.get("since") else "No record yet",
 	        c["p"], c["hd"], c["od"], c["l"], c["a"], c["nr"], c["off"], _pdays(c),
-	        c["late"], c["early"], c["inc"], _hrs(c["mins"]), round(c["mins"] / 60.0 / c["md"], 2) if c["md"] else ""]
+	        c["late"], c["early"], c["inc"], _hrs(c["mins"]), round(c["mins"] / 60.0 / c["md"], 2) if c["md"] else "",
+	        FACE_TXT.get(e.get("face"), ""),
+	        ", ".join(e.get("locs") or []) or ("Not required" if e.get("lopt") else "Not assigned")]
 
 
 def _lv_rows(recs, byid):
@@ -1840,10 +1848,11 @@ def export_attendance_report(period=None, month=None, year=None, view=None, filt
 	except Exception:
 		fl = {}
 	q, dept, only = str(fl.get("q") or "").strip().lower(), fl.get("dept") or "", fl.get("emp") or ""
+	setup = (fl.get("setup") or "") if view != "lv" and not only else ""
 	at, pj = _emp_filter_sets(fl)
 	emps = sorted((e for e in res["employees"]
 	               if (not q or q in e["name"].lower() or q in e["id"].lower()) and (not dept or e["dept"] == dept) and (not only or e["id"] == only)
-	               and (at is None or e["id"] in at) and (pj is None or e["id"] in pj)),
+	               and (at is None or e["id"] in at) and (pj is None or e["id"] in pj) and _setup_match(e, setup)),
 	              key=lambda e: e["name"].lower())
 	byid = {e["id"]: e for e in emps}
 	recs = [r for r in res["records"] if r["emp"] in byid]
@@ -1945,6 +1954,90 @@ def _face_counts(ids):
 	                       % ("sum(approval_status = 'Pending Approval')" if has_appr else "0"), {"ids": tuple(ids)}, as_dict=True):
 		out[r.employee] = (cint(r.ok), cint(r.pend))
 	return out
+
+
+def _norm_mobile(v):
+	"""An Indian mobile number as 10 digits ("" when it does not look like one). Accepts +91 / 91 / 0 prefixes, spaces, dashes."""
+	d = re.sub(r"\D", "", str(v or ""))
+	if len(d) == 12 and d.startswith("91"):
+		d = d[2:]
+	elif len(d) == 11 and d.startswith("0"):
+		d = d[1:]
+	return d if len(d) == 10 and d[0] in "6789" else ""
+
+
+def _setup_info(ids):
+	"""employee -> what Mark In needs and how to reach the person: face ("ok" approved / "pending" waiting for approval /
+	"none"), active assigned locations, location not required, self face registration, dept head name, project, mobile
+	(Employee.cell_number, else the user's mobile) and whether the employee is active."""
+	out = {}
+	if not ids:
+		return out
+	ids = tuple(ids)
+	cols = set(frappe.db.get_table_columns("Employee"))
+	col = lambda c, alias, blank="''": ("ifnull(e.`%s`, %s)" % (c, blank) if c in cols else blank) + " as " + alias
+	rows = frappe.db.sql(
+		"""select e.name, e.status, ifnull(e.cell_number, '') as cell, ifnull(u.mobile_no, '') as umob, %s, %s, %s, %s
+		   from `tabEmployee` e left join `tabUser` u on u.name = e.user_id where e.name in %%(ids)s"""
+		% (col("custom_dept_head_email", "head"), col("custom_project", "proj"), col("jew_location_optional", "lopt", "0"),
+		   col("custom_face_self_register", "sr", "0")), {"ids": ids}, as_dict=True)
+	locs = defaultdict(list)
+	if frappe.db.table_exists("JEW Employee Location Assignment"):
+		for emp, loc in frappe.db.sql(
+			"""select a.employee, trim(l.location_name) from `tabJEW Employee Location Assignment` a
+			   join `tabJEW Attendance Location` l on l.name = a.location
+			   where a.is_active = 1 and l.is_active = 1 and a.employee in %(ids)s order by l.location_name""", {"ids": ids}):
+			if loc and loc not in locs[emp]:
+				locs[emp].append(loc)
+	faces = _face_counts(list(ids))
+	heads, projs = {}, {}
+	for em in {str(r.head).strip().lower() for r in rows if r.head}:
+		heads[em] = frappe.db.get_value("User", {"name": em}, "full_name") or frappe.db.get_value("User", {"email": em}, "full_name") or em
+	pids = {r.proj for r in rows if r.proj}
+	if pids:
+		projs = dict(frappe.db.sql("select name, project_name from `tabProject` where name in %s", [tuple(pids)]))
+	for r in rows:
+		ok, pend = faces.get(r.name, (0, 0))
+		out[r.name] = {"act": 1 if r.status == "Active" else 0, "face": "ok" if ok else ("pending" if pend else "none"),
+		               "locs": locs.get(r.name, []), "lopt": cint(r.lopt), "sr": cint(r.sr),
+		               "head": heads.get(str(r.head or "").strip().lower(), ""), "proj": projs.get(r.proj) or r.proj or "",
+		               "mob": _norm_mobile(r.cell) or _norm_mobile(r.umob)}
+	return out
+
+
+def _setup_match(e, chip):
+	"""Attendance report chips (page + Excel): active employees who cannot Mark In yet."""
+	if chip not in ("face", "fpend", "loc"):
+		return True
+	if not e.get("act"):
+		return False
+	if chip == "face":
+		return e.get("face") == "none"
+	if chip == "fpend":
+		return e.get("face") == "pending"
+	return not e.get("locs") and not e.get("lopt")
+
+
+@frappe.whitelist(methods=["POST"])
+def save_employee_mobile(employee=None, mobile=None):
+	"""Store the mobile number typed in the WhatsApp box on the employee (Employee.cell_number), so it is there next time.
+	HR / Admin for anyone, a Dept Head for their own team (same scope as the page)."""
+	_require_access()
+	if not employee or not frappe.db.exists("Employee", employee):
+		frappe.throw(_("Employee not found."))
+	sc = _scope()
+	if sc is not None and employee not in sc:
+		frappe.throw(_("This employee is not in your team."), frappe.PermissionError)
+	num = _norm_mobile(mobile)
+	if not num:
+		frappe.throw(_("Enter a 10-digit mobile number."))
+	old = frappe.db.get_value("Employee", employee, "cell_number") or ""
+	if _norm_mobile(old) != num:
+		frappe.db.set_value("Employee", employee, "cell_number", num)
+		frappe.get_doc({"doctype": "Comment", "comment_type": "Info", "reference_doctype": "Employee", "reference_name": employee,
+		                "content": "Mobile number %s by %s from the Punch audit page (WhatsApp)" % ("changed" if old else "added", frappe.session.user)}
+		               ).insert(ignore_permissions=True)
+	return {"employee": employee, "mob": num}
 
 
 @frappe.whitelist()
