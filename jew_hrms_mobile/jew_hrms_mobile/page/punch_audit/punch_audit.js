@@ -464,6 +464,7 @@ function jewPunchAuditBuild(page) {
 		const head = '<div class="empH"><button type="button" class="btn ghost sm" data-v="back">' + ic("chevron", 13) + 'Employee summary</button><div class="thumb ini">' + esc(ini(e.name)) + '</div>'
 			+ '<div class="emp"><b>' + esc(e.name) + '</b><span><span class="id" style="font-size:12px">' + esc(e.id) + '</span>' + (e.dept ? ' · ' + esc(e.dept) : "") + '</span></div><div class="sp"></div>'
 			+ '<span class="sub">' + dates.length + (dates.length === 1 ? " day" : " days") + ' · ' + mine.length + (mine.length === 1 ? " punch" : " punches") + ' · ' + withPhoto + (withPhoto === 1 ? " photo" : " photos") + '</span>'
+			+ '<button type="button" class="btn sm wal" data-wa="' + esc(e.id) + '">' + ic("wa", 14) + 'WhatsApp</button>'
 			+ '<button type="button" class="btn sm" data-v="table">' + ic("layers", 13) + 'All punches table</button></div>';
 		const meta = '<div class="meta"><span class="a"><b>' + esc(title) + '</b> · IN and OUT side by side</span><span class="b">Select a photo to enlarge it, or the time to see the full evidence</span></div>';
 		if (!dates.length) return shell(list, head + meta + emptyBody("No punches for " + esc(e.name), "There are no punches in " + esc(title) + ". Pick another month or clear a filter."));
@@ -509,7 +510,8 @@ function jewPunchAuditBuild(page) {
 		const body = arr.map((o) => {
 			const e = EMP[o.id], nd = Object.keys(o.day).length, avg = o.faces.length ? (o.faces.reduce((a, b) => a + b, 0) / o.faces.length).toFixed(2) : "";
 			T.n += o.n; T.ph += o.ph; T.inn += o.inn; T.out += o.out; T.man += o.man; T.fl += o.fl; T.days += nd;
-			return '<tr class="mrow" data-emp="' + esc(e.id) + '" tabindex="0"><td class="emp"><b>' + esc(e.name) + '</b><span><span class="id" style="font-size:12px">' + esc(e.id) + '</span> · ' + esc(e.dept) + '</span></td>'
+			return '<tr class="mrow" data-emp="' + esc(e.id) + '" tabindex="0"><td class="emp" style="min-width:230px"><div class="nmw"><div><b>' + esc(e.name) + '</b><span><span class="id" style="font-size:12px">' + esc(e.id) + '</span> · ' + esc(e.dept) + '</span></div>'
+				+ '<button type="button" class="wa" data-wa="' + esc(e.id) + '" title="' + esc("WhatsApp message to " + e.name) + '" aria-label="Send WhatsApp message">' + ic("wa", 15) + '</button></div></td>'
 				+ '<td><span class="num">' + nd + '</span>' + (days ? '<span class="sub"> / ' + days.length + '</span>' : "") + '</td>'
 				+ '<td><span class="num">' + o.n + '</span></td><td><span class="num">' + o.inn + '</span></td><td><span class="num">' + o.out + '</span></td>'
 				+ '<td>' + (o.ph ? '<span class="num">' + o.ph + '</span><span class="sub"> / ' + o.n + '</span>' : '<span class="sub">—</span>') + '</td>'
@@ -588,7 +590,7 @@ function jewPunchAuditBuild(page) {
 		if (e.hol && (!multi || e.covered)) chips.push(tag("draft", "Holiday" + nd(e.hol)));
 		if (e.absent) chips.push(tag("err", "Marked absent" + nd(e.absent)));
 		const lastD = e.last ? parseD(e.last) : null;
-		return '<tr' + (e.covered ? ' class="cov"' : "") + '><td class="emp"><b>' + esc(e.name) + '</b><span><span class="id" style="font-size:12px">' + esc(e.id) + '</span> · ' + (e.dept ? esc(e.dept) : "No department") + '</span></td>'
+		return '<tr' + (e.covered ? ' class="cov"' : "") + '><td class="emp" style="min-width:260px"><div class="nmw"><div><b>' + esc(e.name) + '</b><span><span class="id" style="font-size:12px">' + esc(e.id) + '</span> · ' + (e.dept ? esc(e.dept) : "No department") + '</span>' + setupTags(e) + '</div>' + waBtn(e) + '</div></td>'
 			+ '<td>' + (e.desig ? esc(e.desig) : '<span class="sub">—</span>') + '</td>'
 			+ '<td>' + (e.login ? tag("ok", "Has login") : tag("draft", "No login")) + '</td>'
 			+ '<td>' + (lastD ? '<span class="dtm">' + fmtDs(lastD) + " " + lastD.getFullYear() + '</span><div class="sub">' + agoTxt(e.ago) + '</div>' : '<span class="sub">Never punched</span>') + '</td>'
@@ -945,22 +947,31 @@ function jewPunchAuditBuild(page) {
 	}
 	function closeEmpModal() { S.rpEmp = null; renderEmpModal(); }
 	// ---- WhatsApp message (opens WhatsApp with the text filled in - the user presses Send there)
-	const WA_KINDS = [["in", "Mark In not done today"], ["out", "Reminder: Mark Out today"], ["missout", "Mark Out missed"], ["face", "Face not registered"], ["fpend", "Face approval pending"], ["loc", "Location not assigned"], ["custom", "My own message"]];
-	let waEmp = null;
+	const WA_KINDS = [["in", "Mark In not done today"], ["nopunch", "No attendance for days"], ["out", "Reminder: Mark Out today"], ["missout", "Mark Out missed"], ["face", "Face not registered"], ["fpend", "Face approval pending"], ["loc", "Location not assigned"], ["nologin", "No app login"], ["custom", "My own message"]];
+	let waEmp = null, waCtx = "rp";   // waCtx: "np" = opened from the Not punched tab (row from NPD), "rp" = report / popup (row from RPD)
+	const npEmpOf = (id) => ((NPD && NPD.employees) || []).find((e) => e.id === id) || null;
+	const WA_X = {};   // employees fetched with get_wa_contact (Employee summary tab, or not in the loaded report)
+	const waEmpOf = (id) => (waCtx === "np" ? npEmpOf(id) || rpEmpOf(id) : rpEmpOf(id) || npEmpOf(id)) || WA_X[id] || null;
 	const normMob = (v) => { let d = String(v || "").replace(/\D/g, ""); if (d.length === 12 && d.startsWith("91")) d = d.slice(2); else if (d.length === 11 && d.startsWith("0")) d = d.slice(1); return /^[6-9]\d{9}$/.test(d) ? d : ""; };
 	function waState(e) {
-		const cells = (RPD && RPD.period === "month" && RPD.cells[e.id]) || {}, td = todayStr(), x = cells[td] || {};
+		const td = todayStr();
+		if (waCtx === "np") {   // no punch in the Not punched period: the setup problem first, else "today" or "since <last punch>"
+			let k = e.face === "none" ? "face" : e.face === "pending" ? "fpend" : noLoc(e) ? "loc" : !e.login ? "nologin" : npIsToday() ? "in" : "nopunch";
+			return { k: k, today: {}, miss: "", last: e.last || "" };
+		}
+		const cells = (RPD && RPD.period === "month" && RPD.cells[e.id]) || {}, x = cells[td] || {};
 		const miss = Object.keys(cells).filter((d) => d < td && cells[d].i).sort().pop() || "";
+		const last = Object.keys(cells).filter((d) => cells[d].in).sort().pop() || "";
 		let k = "in";
 		if (e.face === "none") k = "face"; else if (e.face === "pending") k = "fpend"; else if (noLoc(e)) k = "loc";
 		else if (x.in && !x.out) k = "out";                                   // punched in today: remind to punch out
 		else if (!x.in && ["L", "OD", "H", "WO"].includes(x.s) && miss) k = "missout";   // off today: the last missed Mark Out
 		else if (x.in && x.out && miss) k = "missout";
-		return { k: k, today: x, miss: miss };
+		return { k: k, today: x, miss: miss, last: last };
 	}
-	function waText(e, k, s) {
+	function waText(e, k, s, why) {
 		const first = String(e.name || "").replace(/\(.*?\)/g, "").trim().split(/\s+/)[0] || e.name;
-		const me = (window.frappe && frappe.session && frappe.session.user_fullname) || "HR";
+		why = String(why || "").trim();
 		const head = e.head ? "apne Dept Head (" + e.head + ")" : "apne Dept Head / HR";
 		const dd = (d) => { const x = parseD(d); return x.getDate() + " " + MON[x.getMonth()]; };
 		const locLine = noLoc(e) ? "\n\nSaath hi aapki attendance location bhi abhi assign nahi hai. Location " + head + " se assign karwayein." : "";
@@ -973,42 +984,69 @@ function jewPunchAuditBuild(page) {
 					: "Kripya " + head + " se app me apna face register karwayein. Uske baad aap attendance laga payenge.") + locLine,
 			fpend: "Aapka face JEW HRMS app me register ho gaya hai aur abhi approval ke liye pending hai. Approve hote hi aap Mark In / Mark Out kar payenge." + locLine,
 			loc: "JEW HRMS app me aapki attendance location abhi assign nahi hai, isliye Mark In nahi ho pa raha hai. Kripya " + head + " se location assign karwayein.",
+			nopunch: (s.last ? dd(s.last) + " ke baad se aapne JEW HRMS app me attendance (Mark In) nahi lagayi hai." : "Aapne abhi tak JEW HRMS app me ek bhi baar attendance (Mark In) nahi lagayi hai.")
+				+ " Kripya roz app kholkar Mark In karein, aur kaam khatam hone par Mark Out karein.\n\nAgar app me koi dikkat aa rahi hai to hume batayein.",
+			nologin: "JEW HRMS app me aapka login abhi nahi bana hai, isliye aap app se attendance nahi laga pa rahe hain. Login ke liye kripya " + head + " se sampark karein.",
 			custom: ""
 		};
-		return "Namaste " + first + " ji,\n\n" + (T[k] || "") + "\n\n- " + me;
+		const body = [T[k] || "", why].filter(Boolean).join("\n\n");   // the typed reason goes under the template (or is the whole message)
+		return "Namaste " + first + " ji,\n\n" + body + "\n\nRegards,\nHR";   // sent from the company number: sign as HR, not the person clicking
 	}
-	function openWa(id) {
-		const e = rpEmpOf(id); if (!e) return; waEmp = id;
-		const s = waState(e), m = $$("wam");
+	async function openWa(id, ctx) {
+		waCtx = ctx || "rp";
+		let e = waEmpOf(id);
+		if (!e || e.mob === undefined) {   // not in the loaded report / not-punched list (e.g. Employee summary tab): ask the server
+			const r = await callApi("get_wa_contact", { employee: id });
+			if (!r.ok || !r.data) { toast("Could not read this employee's mobile number"); return; }
+			WA_X[id] = r.data; e = r.data;
+		}
+		waEmp = id;
+		const s = waState(e), m = $$("wam"), k0 = waCtx === "mon" ? "custom" : s.k;
+		// a number already on the Employee / User record is used as it is - the number box shows only when there is none
+		const mob = e.mob ? '<label><span class="lbl">Mobile number</span><div class="in" style="background:var(--bg-sunken)"><span class="sub" style="font-family:var(--font-mono)">+91</span><b class="dtm" style="font-size:14px;color:var(--text-primary)">' + esc(e.mob) + '</b></div><span class="hint">Registered on the employee / user record.</span></label>'
+			: '<label><span class="lbl">Mobile number</span><div class="in"><span class="sub" style="font-family:var(--font-mono)">+91</span><input id="waNum" type="tel" inputmode="numeric" maxlength="18" placeholder="10-digit mobile number"></div>'
+				+ '<span class="hint err" id="waHint">No mobile number on the employee or user record. Type it once - it will be saved on the employee.</span></label>'
+				+ '<label class="chk" id="waSaveRow" style="display:none"><input type="checkbox" id="waSave" checked>Save this number on the employee record</label>';
 		m.innerHTML = '<div class="box" role="dialog" aria-modal="true" aria-label="WhatsApp message"><div class="mh"><span class="wa" style="width:36px;height:36px;cursor:default">' + ic("wa", 18) + '</span><div class="who"><h2>WhatsApp message</h2><div class="sub">to ' + esc(e.name) + ' · <span class="id" style="font-size:12px">' + esc(e.id) + '</span></div></div>'
 			+ '<div class="acts"><button type="button" class="ibtn" data-wm="close" aria-label="Close" title="Close (Esc)">' + ic("close", 16) + '</button></div></div>'
-			+ '<div class="wf"><label><span class="lbl">Mobile number</span><div class="in"><span class="sub" style="font-family:var(--font-mono)">+91</span><input id="waNum" type="tel" inputmode="numeric" maxlength="18"placeholder="10-digit mobile number" value="' + esc(e.mob || "") + '"></div>'
-			+ '<span class="hint" id="waHint">' + (e.mob ? "From the employee record." : "No mobile number on the employee record. Type it once - it will be saved on the employee.") + '</span></label>'
-			+ '<label class="chk" id="waSaveRow" style="display:none"><input type="checkbox" id="waSave" checked>Save this number on the employee record</label>'
-			+ '<label><span class="lbl">Message about</span><div class="in"><select id="waKind">' + WA_KINDS.map((x) => '<option value="' + x[0] + '"' + (x[0] === s.k ? " selected" : "") + '>' + x[1] + '</option>').join("") + '</select><span class="chev">' + ic("chevron", 14) + '</span></div></label>'
-			+ '<label><span class="lbl">Message · you can edit it</span><textarea id="waTxt">' + esc(waText(e, s.k, s)) + '</textarea></label></div>'
+			+ '<div class="wf">' + mob
+			+ '<label><span class="lbl">Message about</span><div class="in"><select id="waKind">' + WA_KINDS.map((x) => '<option value="' + x[0] + '"' + (x[0] === k0 ? " selected" : "") + '>' + x[1] + '</option>').join("") + '</select><span class="chev">' + ic("chevron", 14) + '</span></div></label>'
+			+ '<label><span class="lbl">Reason · type it here, it goes into the message</span><div class="in"><input id="waWhy" maxlength="300" placeholder="e.g. Kal 23 Nov ko aapka punch site se bahar ka aaya hai" autocomplete="off"></div></label>'
+			+ '<label><span class="lbl">Message · you can edit it</span><textarea id="waTxt">' + esc(waText(e, k0, s, "")) + '</textarea></label></div>'
 			+ '<div class="mf"><button type="button" class="btn" data-wm="close">Cancel</button><button type="button" class="btn wag" data-wm="go">' + ic("wa", 15) + 'Open WhatsApp</button></div></div>';
 		m.classList.add("on"); m.setAttribute("aria-hidden", "false");
-		const n = root.getElementById("waNum"); if (n && !e.mob) setTimeout(() => n.focus(), 30);
+		const f = root.getElementById(e.mob ? "waWhy" : "waNum"); if (f && (!e.mob || k0 === "custom")) setTimeout(() => f.focus(), 30);
+	}
+	function waRewrite() {   // message type or reason changed: rebuild the message
+		const e = waEmpOf(waEmp); if (!e) return;
+		const k = root.getElementById("waKind").value, why = root.getElementById("waWhy").value;
+		root.getElementById("waTxt").value = waText(e, k, waState(e), why);
 	}
 	function closeWa() { waEmp = null; const m = $$("wam"); m.classList.remove("on"); m.setAttribute("aria-hidden", "true"); m.innerHTML = ""; }
 	function waSync() {
-		const e = rpEmpOf(waEmp); if (!e) return;
+		const e = waEmpOf(waEmp); if (!e || !root.getElementById("waNum")) return;
 		const raw = root.getElementById("waNum").value, num = normMob(raw), h = root.getElementById("waHint");
 		root.getElementById("waSaveRow").style.display = num && num !== e.mob ? "" : "none";
 		h.classList.toggle("err", !!raw.trim() && !num);
 		h.textContent = !raw.trim() ? "No mobile number on the employee record. Type it once - it will be saved on the employee." : !num ? "Enter a valid 10-digit mobile number." : num === e.mob ? "From the employee record." : e.mob ? "Different from the saved number (" + e.mob + ")." : "New number.";
 	}
 	function waGo() {
-		const e = rpEmpOf(waEmp); if (!e) { closeWa(); return; }
-		const num = normMob(root.getElementById("waNum").value), txt = root.getElementById("waTxt").value.trim();
-		if (!num) { waSync(); root.getElementById("waHint").classList.add("err"); root.getElementById("waNum").focus(); toast("Enter a 10-digit mobile number"); return; }
+		const e = waEmpOf(waEmp); if (!e) { closeWa(); return; }
+		const box = root.getElementById("waNum"), num = e.mob || normMob(box ? box.value : ""), txt = root.getElementById("waTxt").value.trim();
+		if (!num) { waSync(); root.getElementById("waHint").classList.add("err"); if (box) box.focus(); toast("Enter a 10-digit mobile number"); return; }
 		if (!txt) { root.getElementById("waTxt").focus(); toast("Write a message first"); return; }
-		window.open("https://wa.me/91" + num + "?text=" + encodeURIComponent(txt), "_blank", "noopener");
-		const save = num !== e.mob && root.getElementById("waSave").checked;
+		// Computer: WhatsApp Web (the company number logged in there) in ONE reused tab; phone: the WhatsApp app
+		const phone = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "");
+		if (phone) window.open("https://wa.me/91" + num + "?text=" + encodeURIComponent(txt), "_blank", "noopener");
+		else window.open("https://web.whatsapp.com/send?phone=91" + num + "&text=" + encodeURIComponent(txt), "jew_whatsapp");
+		const save = !e.mob && !!box && root.getElementById("waSave").checked;
 		closeWa();
 		if (save) callApi("save_employee_mobile", { employee: e.id, mobile: num }).then((r) => {
-			if (r.ok && r.data) { ((RPD && RPD.employees) || []).forEach((x) => { if (x.id === e.id) x.mob = r.data.mob; }); Object.values(rpCache).forEach((c) => (c.data.employees || []).forEach((x) => { if (x.id === e.id) x.mob = r.data.mob; })); toast("WhatsApp opened · number saved for " + e.name.split(" ")[0]); render(); }
+			if (r.ok && r.data) {
+				const put = (list) => (list || []).forEach((x) => { if (x.id === e.id) x.mob = r.data.mob; });
+				put(RPD && RPD.employees); put(NPD && NPD.employees); put(Object.values(WA_X));
+				Object.values(rpCache).forEach((c) => put(c.data && c.data.employees)); Object.values(cache).forEach((c) => put(c.np && c.np.employees));
+				toast("WhatsApp opened · number saved for " + e.name.split(" ")[0]); render(); }
 			else toast("WhatsApp opened · could not save the number");
 		});
 		else toast("WhatsApp opened - press Send there");
@@ -1351,7 +1389,7 @@ function jewPunchAuditBuild(page) {
 		S.anim = false; render();
 	}
 	$$("view").addEventListener("click", (ev) => {
-		const wb = ev.target.closest("[data-wa]"); if (wb) { openWa(wb.dataset.wa); return; }
+		const wb = ev.target.closest("[data-wa]"); if (wb) { openWa(wb.dataset.wa, S.tab === "np" ? "np" : S.tab === "mon" ? "mon" : "rp"); return; }
 		const lsw = ev.target.closest("[data-lc]"); if (lsw) { if (!lsw.disabled) toggleLive(lsw.dataset.lc); return; }
 		const lcc = ev.target.closest("[data-lcc]"); if (lcc) { S.lcChip = lcc.dataset.lcc; S.anim = false; render(); return; }
 		const rb = ev.target.closest("[data-rp]"); if (rb) { rpAction(rb); return; }
@@ -1368,7 +1406,7 @@ function jewPunchAuditBuild(page) {
 		const hf = ev.target.closest(".dhalf[data-id]"); if (hf) { openDrawer(hf.dataset.id); return; }
 		const ec = ev.target.closest(".ecard, tr.mrow"); if (ec) { S.empView = ec.dataset.emp; S.tab = "mon"; S.kpi = null; S.anim = true; render(); $$("tabs").scrollIntoView({ behavior: "smooth", block: "start" }); }
 	});
-	$$("view").addEventListener("keydown", (ev) => { if (ev.key === "Enter") { const rr = ev.target.closest("tr[data-rp]"); if (rr) { rr.click(); return; } const r = ev.target.closest("tbody tr[data-id]"); if (r) openDrawer(r.dataset.id); const m = ev.target.closest("tr.mrow"); if (m) m.click(); const xr = ev.target.closest("[data-ex]"); if (xr) xr.click(); const h = ev.target.closest(".dhalf[data-id]"); if (h) openDrawer(h.dataset.id); } });
+	$$("view").addEventListener("keydown", (ev) => { if (ev.key === "Enter" && !ev.target.closest("[data-wa]")) { const rr = ev.target.closest("tr[data-rp]"); if (rr) { rr.click(); return; } const r = ev.target.closest("tbody tr[data-id]"); if (r) openDrawer(r.dataset.id); const m = ev.target.closest("tr.mrow"); if (m) m.click(); const xr = ev.target.closest("[data-ex]"); if (xr) xr.click(); const h = ev.target.closest(".dhalf[data-id]"); if (h) openDrawer(h.dataset.id); } });
 	$$("scrim").addEventListener("click", closeDrawer);
 	$$("lbx").addEventListener("click", closeLightbox);
 	document.addEventListener("keydown", (ev) => { if (ev.key !== "Escape") return; if ($$("lbx").classList.contains("on")) closeLightbox(); else if (waEmp) closeWa(); else if (S.rpEmp && $$("epm").classList.contains("on")) closeEmpModal(); else if (openId) closeDrawer(); });
@@ -1393,12 +1431,12 @@ function jewPunchAuditBuild(page) {
 		const b = ev.target.closest("[data-wm]"); if (!b) return;
 		if (b.dataset.wm === "close") closeWa(); else if (b.dataset.wm === "go") waGo();
 	});
-	$$("wam").addEventListener("input", (ev) => { if (ev.target.id === "waNum") waSync(); });
+	$$("wam").addEventListener("input", (ev) => { if (ev.target.id === "waNum") waSync(); else if (ev.target.id === "waWhy") waRewrite(); });
 	$$("wam").addEventListener("change", (ev) => {
 		if (ev.target.id !== "waKind") return;
-		const e = rpEmpOf(waEmp); if (!e) return;
-		const t = root.getElementById("waTxt"); t.value = waText(e, ev.target.value, waState(e)); if (ev.target.value === "custom") { t.focus(); t.setSelectionRange(t.value.indexOf("\n\n") + 2, t.value.indexOf("\n\n") + 2); }
+		waRewrite(); if (ev.target.value === "custom") root.getElementById("waWhy").focus();
 	});
+	$$("wam").addEventListener("keydown", (ev) => { if (ev.key === "Enter" && ev.target.id === "waWhy") { ev.preventDefault(); waGo(); } });
 	$$("drawer").addEventListener("click", async (ev) => {
 		if (ev.target.closest("[data-close]")) { closeDrawer(); return; }
 		const zi = ev.target.closest("img[data-zoom]"); if (zi) { openLightbox(zi.src); return; }

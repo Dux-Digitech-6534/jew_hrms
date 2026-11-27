@@ -2557,11 +2557,32 @@ function Approvers({ data }: any) {
   </>;
 }
 
+// ref_state: the request's CURRENT status (Approved / Rejected / Cancelled / Pending ...) from get_notifications, so an
+// approval request that has been decided shows it instead of still looking open. The message keeps its line breaks.
+const NOTE_TONE: Record<string, [string, string]> = {
+  ok: ["#15916A", "rgba(21,145,106,.12)"], err: ["#C8475E", "rgba(200,71,94,.11)"],
+  pend: ["#B0741A", "rgba(176,116,26,.12)"], mut: ["#6B7280", "rgba(107,114,128,.12)"],
+};
+function noteWhen(c?: string) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(c || "");
+  return m ? `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}` : "";
+}
 function Notifications({ items }: any) {
   return <>
-    {items.length ? items.map((n: any, i: number) => (
-      <div className="qrow" key={i}><div className="qa"><Ic name="bell" style={{ width: 17, height: 17 }} /></div><div className="qt"><strong>{n.title}</strong><span>{n.message}</span></div></div>
-    )) : <div className="empty"><h3>No notifications</h3><p>You're all caught up.</p></div>}
+    {items.length ? items.map((n: any, i: number) => {
+      const tone = NOTE_TONE[n.ref_tone] || NOTE_TONE.mut;
+      return <div className="qrow" key={i} style={{ alignItems: "flex-start", opacity: n.done ? 0.78 : 1 }}>
+        <div className="qa"><Ic name="bell" style={{ width: 17, height: 17 }} /></div>
+        <div className="qt">
+          <strong style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>{n.title}
+            {n.ref_state ? <em style={{ fontStyle: "normal", fontSize: 10.5, fontWeight: 600, padding: "2px 8px", borderRadius: 999, color: tone[0], background: tone[1] }}>{n.ref_state}</em> : null}
+          </strong>
+          <span style={{ whiteSpace: "pre-line", lineHeight: 1.5, marginTop: 3 }}>{n.message}</span>
+          {n.details ? <span style={{ whiteSpace: "pre-line", lineHeight: 1.5, marginTop: 6, paddingTop: 6, borderTop: "1px dashed var(--hair)" }}>{n.details}</span> : null}
+          {noteWhen(n.creation) ? <span style={{ marginTop: 4, opacity: 0.8 }}>{noteWhen(n.creation)}</span> : null}
+        </div>
+      </div>;
+    }) : <div className="empty"><h3>No notifications</h3><p>You're all caught up.</p></div>}
   </>;
 }
 

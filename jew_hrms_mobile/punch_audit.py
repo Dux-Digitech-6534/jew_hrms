@@ -1049,6 +1049,10 @@ def _not_punched_rows(f, t):
 			"leave": n_leave, "half": len(lhalf[e.name] & day_set), "od": n_od, "marked": n_marked, "hol": n_hol,
 			"absent": len(absent[e.name] & day_set), "covered": 0 if rem else 1,
 		})
+	# face / location / mobile for the WhatsApp button and the tags under the name
+	info = _setup_info([e["id"] for e in out["employees"]])
+	for e in out["employees"]:
+		e.update(info.get(e["id"]) or {})
 	return out
 
 
@@ -1958,7 +1962,7 @@ def _face_counts(ids):
 
 def _norm_mobile(v):
 	"""An Indian mobile number as 10 digits ("" when it does not look like one). Accepts +91 / 91 / 0 prefixes, spaces, dashes."""
-	d = re.sub(r"\D", "", str(v or ""))
+	d = re.sub(r"\D", "", re.sub(r"\.0+$", "", str(v or "").strip()))   # "9876543210.0" from an Excel import
 	if len(d) == 12 and d.startswith("91"):
 		d = d[2:]
 	elif len(d) == 11 and d.startswith("0"):
@@ -2016,6 +2020,24 @@ def _setup_match(e, chip):
 	if chip == "fpend":
 		return e.get("face") == "pending"
 	return not e.get("locs") and not e.get("lopt")
+
+
+@frappe.whitelist()
+def get_wa_contact(employee=None):
+	"""One employee for the WhatsApp box when the page has no row for them yet (Employee summary tab): name, mobile
+	(Employee / User record), face / location state, last punch. Same scope as the page."""
+	_require_access()
+	if not employee or not frappe.db.exists("Employee", employee):
+		frappe.throw(_("Employee not found."))
+	sc = _scope()
+	if sc is not None and employee not in sc:
+		frappe.throw(_("This employee is not in your team."), frappe.PermissionError)
+	e = frappe.db.get_value("Employee", employee, ["name", "employee_name", "department", "designation", "user_id"], as_dict=True)
+	last = frappe.db.sql("select max(time) from `tabEmployee Checkin` where employee = %s", employee)[0][0]
+	out = {"id": e.name, "name": str(e.employee_name or e.name).strip(), "dept": e.department or "", "desig": e.designation or "",
+	       "login": 1 if e.user_id else 0, "last": str(getdate(last)) if last else None}
+	out.update(_setup_info([employee]).get(employee) or {})
+	return out
 
 
 @frappe.whitelist(methods=["POST"])

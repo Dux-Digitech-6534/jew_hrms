@@ -2831,6 +2831,224 @@ def _send_template_email(recipients, template_name, ctx, doc, attachments=None):
 		frappe.log_error(frappe.get_traceback(), "JEW HRMS template email failed ({0})".format(template_name))
 
 
+# ---- Approver notifications carry the whole request, and the app shows each request's live status ------------------
+APPROVAL_REF_DOCTYPES = ("Leave Application", "Attendance Request", "JEW Late Early Application", "JEW Attendance Regularization")
+
+
+def _clock_hm(value):
+	"""'9:30:00' / timedelta / datetime -> '09:30' ('' when empty)."""
+	if not value:
+		return ""
+	if isinstance(value, datetime):
+		return value.strftime("%H:%M")
+	parts = str(value).split(" ")[-1].split(":")
+	try:
+		return "%02d:%s" % (int(parts[0]), parts[1][:2])
+	except Exception:
+		return str(value)
+
+
+def _approval_details(doc, employee_doc, pending_with="", show_employee=True, show_decision=False):
+	"""Multi-line text with everything an approver needs to decide from the notification itself: who (ID, designation,
+	department, project), what was asked, dates / time, days, half day, reason, applied on, and whose approval it is
+	waiting for. Used for the mobile app's notification list (JEW HRMS Notification). show_employee=False leaves out the
+	"who" lines (the employee reading about their own request); show_decision adds who approved / rejected and their
+	remarks. Never raises."""
+	import re
+	try:
+		def emp(field):
+			v = employee_doc.get(field) if employee_doc else None
+			if v is None and employee_doc and employee_doc.get("name"):
+				v = frappe.db.get_value("Employee", employee_doc.get("name"), field)
+			return v or ""
+
+		def clean(v):
+			return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", str(v or ""))).strip() or "-"
+
+		def span(a, b):
+			return _fmt_dmy(a) if getdate(a) == getdate(b) else "{0} to {1}".format(_fmt_dmy(a), _fmt_dmy(b))
+
+		def ndays(n):
+			n = flt(n)
+			return "{0} day{1}".format(("%g" % n), "" if n == 1 else "s")
+
+		eid = emp("name") or doc.get("employee")
+		lines = []
+		if show_employee:
+			lines.append("Employee: {0} ({1})".format(emp("employee_name") or doc.get("employee_name") or eid, eid))
+			proj = emp("custom_project") if frappe.db.has_column("Employee", "custom_project") else ""
+			proj = (frappe.db.get_value("Project", proj, "project_name") or proj) if proj else ""
+			role = " · ".join(x for x in (emp("designation"), emp("department"), proj) if x)
+			if role:
+				lines.append(role)
+		dt = doc.doctype
+		if dt == "Leave Application":
+			half = cint(doc.get("half_day"))
+			days = 0.5 if half and getdate(doc.from_date) == getdate(doc.to_date) else (doc.get("total_leave_days") or date_diff(doc.to_date, doc.from_date) + 1)
+			lines += ["Leave: {0}".format(doc.leave_type or "-"), "Dates: {0} ({1})".format(span(doc.from_date, doc.to_date), ndays(days))]
+			if half:
+				lines.append("Half day: {0}{1}".format(_fmt_dmy(doc.get("half_day_date") or doc.from_date),
+				                                       " ({0})".format(doc.get("custom_half_day_type")) if doc.get("custom_half_day_type") else ""))
+			lines.append("Reason: " + clean(doc.get("description")))
+			try:
+				# same count as the approval e-mail: approved leave in the 15 days before the application was made
+				lines.append("Leave taken in the last 15 days: {0}".format(ndays(_recent_leave_days_count(eid, doc.creation or doc.from_date, exclude_name=doc.name))))
+			except Exception:
+				pass
+			if doc.get("attachment"):
+				lines.append("Attachment: yes (open it in the e-mail or the app)")
+		elif dt == "Attendance Request":
+			lines += ["Request: On Duty", "Dates: {0} ({1})".format(span(doc.from_date, doc.to_date), ndays(date_diff(doc.to_date, doc.from_date) + 1))]
+			if cint(doc.get("half_day")):
+				lines.append("Half day: {0}{1}".format(_fmt_dmy(doc.get("half_day_date") or doc.from_date),
+				                                       " ({0})".format(doc.get("custom_half_day_type")) if doc.get("custom_half_day_type") else ""))
+			lines.append("Details: " + clean(doc.get("explanation")))
+		elif dt == "JEW Late Early Application":
+			late = doc.get("application_type") == "Late Coming"
+			lines += ["Request: {0}".format(doc.get("application_type") or "-"), "Date: " + _fmt_dmy(doc.get("application_date"))]
+			if doc.get("expected_time"):
+				lines.append(("Will arrive at: " if late else "Will leave at: ") + _clock_hm(doc.get("expected_time")))
+			if doc.get("shift_name"):
+				lines.append("Shift: " + str(doc.get("shift_name")))
+			lines.append("Reason: " + clean(doc.get("reason")))
+		elif dt == "JEW Attendance Regularization":
+			lines += ["Request: Attendance regularization - {0}".format(doc.get("issue_type") or "-"), "Date: " + _fmt_dmy(doc.get("attendance_date"))]
+			if doc.get("in_time") or doc.get("out_time"):
+				lines.append("Punches: IN {0} · OUT {1}".format(_clock_hm(doc.get("in_time")) or "-", _clock_hm(doc.get("out_time")) or "-"))
+			if flt(doc.get("working_hours")):
+				lines.append("Working hours: {0:.1f}".format(flt(doc.get("working_hours"))))
+			lines.append("Reason: " + clean(doc.get("remarks")))
+		if doc.get("creation"):
+			lines.append("Applied on: " + get_datetime(doc.creation).strftime("%d/%m/%Y %H:%M"))
+		if show_decision:
+			def by(user, on=None):
+				return (_user_display_name(user) or user) + (" on " + get_datetime(on).strftime("%d/%m/%Y %H:%M") if on else "")
+			if dt == "Leave Application":
+				if doc.get("dept_head_approved_by"):
+					lines.append("Dept Head approved: " + by(doc.get("dept_head_approved_by"), doc.get("dept_head_approved_on")))
+				if doc.get("owner_approved_by"):
+					lines.append("MD approved: " + by(doc.get("owner_approved_by"), doc.get("owner_approved_on")))
+				if doc.get("rejected_by"):
+					lines.append("Rejected by: " + by(doc.get("rejected_by"), doc.get("rejection_date")))
+			elif dt == "Attendance Request":
+				if doc.get("jew_od_remarks"):
+					lines.append("Approver remarks: " + clean(doc.get("jew_od_remarks")))
+			elif dt == "JEW Late Early Application":
+				if doc.get("dept_head_approved_by"):
+					lines.append("Dept Head approved: " + by(doc.get("dept_head_approved_by"), doc.get("dept_head_approved_on")))
+				if doc.get("hr_approved_by"):
+					lines.append("HR approved: " + by(doc.get("hr_approved_by"), doc.get("hr_approved_on")))
+				if doc.get("remarks"):
+					lines.append("Approver remarks: " + clean(doc.get("remarks")))
+				if doc.get("status") == "Cancelled" and doc.get("jew_cancel_reason"):
+					lines.append("Cancelled: " + clean(doc.get("jew_cancel_reason")))
+			elif dt == "JEW Attendance Regularization":
+				if doc.get("approved_by"):
+					lines.append("Decided by: " + by(doc.get("approved_by")))
+		if pending_with:
+			lines.append("Pending: " + pending_with)
+		return "\n".join(lines)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "JEW HRMS approval details text failed")
+		return "{0} {1} - pending {2}".format(doc.doctype, doc.name, pending_with or "approval")
+
+
+def _reason_tail(text, limit=160):
+	"""' Reason: ...' for a one-line Desk bell message ('' when there is no reason)."""
+	import re
+	t = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", str(text or ""))).strip()
+	if not t:
+		return ""
+	return " Reason: " + (t if len(t) <= limit else t[:limit - 1] + "…")
+
+
+def _notify_approver_employees(recipients, doc, title, message):
+	"""The mobile app's notification list (JEW HRMS Notification) for every approver e-mail that belongs to an employee.
+	Best-effort, one row per employee."""
+	seen = set()
+	for r in (recipients or []):
+		if not r:
+			continue
+		try:
+			emp = frappe.db.get_value("Employee", {"user_id": r}, "name")
+			if not emp:
+				u = frappe.db.get_value("User", {"email": r}, "name")
+				if u:
+					emp = frappe.db.get_value("Employee", {"user_id": u}, "name")
+			if emp and emp not in seen:
+				seen.add(emp)
+				_safe_insert_notification(emp, title, message, "Info", doc.doctype, doc.name)
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), "JEW HRMS approver app notification failed")
+
+
+def _approval_ref_states(items):
+	"""(doctype, name) -> (label, tone) - the CURRENT state of each request a notification points to, so the app can show
+	Approved / Rejected / Cancelled / Pending with ... on it (an approval request someone already decided no longer looks open)."""
+	from collections import defaultdict
+	by = defaultdict(set)
+	for n in items:
+		if n.get("reference_doctype") in APPROVAL_REF_DOCTYPES and n.get("reference_name"):
+			by[n["reference_doctype"]].add(n["reference_name"])
+	out = {}
+	try:
+		names = tuple(by.get("Leave Application") or ())
+		if names:
+			for r in frappe.db.sql("""select name, status, docstatus, ifnull(jew_hrms_approval_status, '') st from `tabLeave Application`
+					where name in %s""", [names], as_dict=True):
+				if r.docstatus == 2 or r.status == "Cancelled":
+					s = ("Cancelled", "mut")
+				elif r.status == "Rejected" or r.st == "Rejected":
+					s = ("Rejected", "err")
+				elif r.status == "Approved" and r.docstatus == 1:
+					s = ("Approved", "ok")
+				else:
+					s = (r.st or "Pending", "pend")
+				out[("Leave Application", r.name)] = s
+		names = tuple(by.get("Attendance Request") or ())
+		if names:
+			for r in frappe.db.sql("""select name, docstatus, ifnull(jew_od_status, '') st from `tabAttendance Request` where name in %s""", [names], as_dict=True):
+				s = (("Approved", "ok") if r.docstatus == 1 else ("Cancelled", "mut") if r.docstatus == 2 else ("Rejected", "err") if r.st == "Rejected"
+				     else ("Pending Dept Head approval", "pend") if r.st == "Pending Dept Head" else ("Pending final approval", "pend"))
+				out[("Attendance Request", r.name)] = s
+		names = tuple(by.get("JEW Late Early Application") or ())
+		if names:
+			for r in frappe.db.sql("""select name, status from `tabJEW Late Early Application` where name in %s""", [names], as_dict=True):
+				s = {"Approved": ("Approved", "ok"), "Rejected": ("Rejected", "err"), "Cancelled": ("Cancelled", "mut"),
+				     "Pending HR": ("Pending HR approval", "pend")}.get(r.status, ("Pending Dept Head approval", "pend"))
+				out[("JEW Late Early Application", r.name)] = s
+		names = tuple(by.get("JEW Attendance Regularization") or ())
+		if names:
+			for r in frappe.db.sql("""select name, status from `tabJEW Attendance Regularization` where name in %s""", [names], as_dict=True):
+				st = r.status or "Pending"
+				out[("JEW Attendance Regularization", r.name)] = (("Pending", "pend") if st == "Pending" else ("Rejected", "err") if st == "Rejected"
+				                                                  else (st.replace("Approved as Present", "Approved (Present)"), "ok"))
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "JEW HRMS notification status lookup failed")
+	return out
+
+
+def _approval_ref_details(items, viewer_employee=None):
+	"""(doctype, name) -> the full request text (what, dates / time, reason, applied on, who approved / rejected) for every
+	leave / on duty / late-early / regularization the notifications point to, read from the request as it is NOW - so even
+	the short or older notifications ("Regularization pending", "Late/Early application updated") show everything.
+	The "Employee:" lines are left out when the reader is that employee. Best-effort."""
+	out, emps = {}, {}
+	refs = {(n.get("reference_doctype"), n.get("reference_name")) for n in items
+	        if n.get("reference_doctype") in APPROVAL_REF_DOCTYPES and n.get("reference_name")}
+	for dt, name in refs:
+		try:
+			if not frappe.db.exists(dt, name):
+				continue
+			doc = frappe.get_doc(dt, name)
+			if doc.get("employee") not in emps:
+				emps[doc.get("employee")] = frappe.get_doc("Employee", doc.get("employee")) if doc.get("employee") else None
+			out[(dt, name)] = _approval_details(doc, emps[doc.get("employee")], "", show_employee=doc.get("employee") != viewer_employee, show_decision=True)
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), "JEW HRMS notification details failed")
+	return out
+
+
 def _desk_bell_notify(recipients, doc, message):
 	"""Push a real Frappe 'Notification Log' entry (Desk's own top-right bell) to
 	each recipient - independent of email delivery, so an SMTP hiccup never leaves
@@ -2877,23 +3095,14 @@ def _notify_approvers_inapp(recipients, doc, employee_doc, status):
 				"type": "Alert",
 				"document_type": doc.doctype,
 				"document_name": doc.name,
-				"subject": msg,
+				"subject": msg + _reason_tail(doc.get("description")),
 			})
 		except Exception:
 			frappe.log_error(frappe.get_traceback(), "JEW HRMS Desk bell notification failed")
 
-	seen = set()
-	for r in (recipients or []):
-		if not r:
-			continue
-		emp = frappe.db.get_value("Employee", {"user_id": r}, "name")
-		if not emp:
-			u = frappe.db.get_value("User", {"email": r}, "name")
-			if u:
-				emp = frappe.db.get_value("Employee", {"user_id": u}, "name")
-		if emp and emp not in seen:
-			seen.add(emp)
-			_safe_insert_notification(emp, "Leave approval needed", msg, "Info", "Leave Application", doc.name)
+	# the app's notification list gets the whole leave (who, type, dates, days, half day, reason, recent leave, applied on)
+	_notify_approver_employees(recipients, doc, "Leave approval needed",
+	                           _approval_details(doc, employee_doc, "your {0} approval".format(stage_label) if stage_label else "your approval"))
 
 
 def _leave_attachment_for_email(doc):
@@ -4626,6 +4835,20 @@ def get_notifications():
 			limit_page_length=50,
 			ignore_permissions=True,
 		))
+		# live state of the leave / on duty / late-early / regularization each one points to: an approval request that was
+		# approved or rejected (from the app, e-mail or Desk) shows that instead of still looking open
+		states = _approval_ref_states(items)
+		# the full request under every notification that points to one (approver notifications made since 27-11-2026
+		# already carry it in the message itself - those are left as they are)
+		dets = _approval_ref_details(items, employee.name)
+		for n in items:
+			key = (n.get("reference_doctype"), n.get("reference_name"))
+			s = states.get(key)
+			if s:
+				n["ref_state"], n["ref_tone"] = s
+				n["done"] = 0 if s[1] == "pend" else 1
+			if dets.get(key) and not str(n.get("message") or "").startswith("Employee:"):
+				n["details"] = dets[key]
 	if employee and not _active_face(employee.name):
 		items.append({"type": "warning", "title": "Face not registered", "message": "Ask HR to register your face before marking attendance."})
 	if employee and not _assigned_locations(employee.name) and not _location_optional(employee.name):
@@ -4940,7 +5163,8 @@ def _send_regularization_request_email(doc, employee_doc):
 	_send_template_email(recipients, "Attendance Regularization - HR Request", ctx, doc)
 	msg = "{0}: {1} on {2} needs your review.".format(
 		employee_doc.employee_name or employee_doc.name, doc.issue_type, _fmt_dmy(doc.attendance_date))
-	_desk_bell_notify(recipients, doc, msg)
+	_desk_bell_notify(recipients, doc, msg + _reason_tail(doc.get("remarks")))
+	_notify_approver_employees(recipients, doc, "Regularization approval needed", _approval_details(doc, employee_doc, "your review"))
 
 
 @frappe.whitelist()
@@ -5578,7 +5802,10 @@ def _send_on_duty_request_email(doc, employee_doc):
 		                message=message, sender=_hrms_sender_email(), reference_doctype=doc.doctype, reference_name=doc.name)
 	except Exception:
 		frappe.log_error(frappe.get_traceback(), "JEW HRMS on duty request email failed")
-	_desk_bell_notify(recipients, doc, "{0}: On Duty requested from {1} - pending your review.".format(employee_doc.employee_name or employee_doc.name, date_range))
+	_desk_bell_notify(recipients, doc, "{0}: On Duty requested from {1} - pending your review.".format(employee_doc.employee_name or employee_doc.name, date_range)
+	                  + _reason_tail(doc.get("explanation")))
+	_notify_approver_employees(recipients, doc, "On Duty approval needed",
+	                           _approval_details(doc, employee_doc, "your Department Head approval" if doc.get("jew_od_status") == "Pending Dept Head" else "your approval"))
 
 
 @frappe.whitelist(allow_guest=True)
@@ -5951,7 +6178,9 @@ def _send_late_early_request_email(doc, employee_doc):
 	_send_template_email([dh_email], "Late Early - Dept Head Approval Request", ctx, doc)
 	msg = "{0} applied for {1} on {2} - pending your Department Head approval.".format(
 		employee_doc.employee_name or employee_doc.name, doc.application_type, _fmt_dmy(doc.application_date))
-	_desk_bell_notify([dh_email], doc, msg)
+	_desk_bell_notify([dh_email], doc, msg + _reason_tail(doc.get("reason")))
+	_notify_approver_employees([dh_email], doc, "{0} approval needed".format(doc.application_type or "Late / Early"),
+	                           _approval_details(doc, employee_doc, "your Department Head approval"))
 
 
 def _send_late_early_hr_request_email(doc, employee_doc):
@@ -5971,7 +6200,9 @@ def _send_late_early_hr_request_email(doc, employee_doc):
 	_send_template_email(recipients, "Late Early - HR Approval Request", ctx, doc)
 	msg = "{0} applied for {1} on {2} - pending your HR approval.".format(
 		employee_doc.employee_name or employee_doc.name, doc.application_type, _fmt_dmy(doc.application_date))
-	_desk_bell_notify(recipients, doc, msg)
+	_desk_bell_notify(recipients, doc, msg + _reason_tail(doc.get("reason")))
+	_notify_approver_employees(recipients, doc, "{0} approval needed".format(doc.application_type or "Late / Early"),
+	                           _approval_details(doc, employee_doc, "your HR approval (Department Head approved)"))
 
 
 def _send_late_early_decision_email(doc, employee_doc, decision):
